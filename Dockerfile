@@ -20,3 +20,4 @@ RUN useradd --system --uid 10001 app
 USER app
 
 ENTRYPOINT ["source-app"]
+CMD ["run"]

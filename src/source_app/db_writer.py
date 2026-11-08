@@ -2,7 +2,7 @@ import dataclasses
 import logging
 
 from psycopg2.extras import execute_values
-from sqlalchemy import create_engine, text
+from sqlalchemy import URL, create_engine, text
 from sqlalchemy.engine import Connection
 from sqlalchemy.exc import OperationalError
 
@@ -14,10 +14,7 @@ logging.basicConfig(level=logging.INFO, format="[%(asctime)s] %(levelname)s: %(m
 class DataWriter:
     def __init__(
         self,
-        user: str,
-        password: str,
-        host: str,
-        db_name: str,
+        url: URL,
         schema: str,
         batch_size: int = 1000,
         echo: bool = False,
@@ -25,10 +22,7 @@ class DataWriter:
         self.schema = schema
         self.batch_size = batch_size
         self.echo = echo
-        self._user = user
-        self._password = password
-        self._host = host
-        self._db_name = db_name
+        self._url = url
         self.conn: Connection | None = None
         self._connect()
 
@@ -104,10 +98,13 @@ class DataWriter:
         return [table for table, _ in self._ddl_stmts().items()]
 
     def create_tables_if_not_exists(self):
+        self._ensure_connection()
+        self.conn.execute(text(f"CREATE SCHEMA IF NOT EXISTS {self.schema}"))
         for table, ddl in self._ddl_stmts().items():
             self._ensure_connection()
             logging.info(f"Creating table {self.schema}.{table}")
             self.conn.execute(text(ddl))
+        self.conn.commit()
 
     def close(self):
         if self.conn:
@@ -124,7 +121,7 @@ class DataWriter:
 
     def _connect(self):
         engine = create_engine(
-            f"postgresql+psycopg2://{self._user}:{self._password}@{self._host}/{self._db_name}",
+            self._url,
             echo=self.echo,
         )
         self.conn = engine.connect()

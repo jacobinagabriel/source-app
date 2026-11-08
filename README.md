@@ -14,16 +14,33 @@ Needs Python 3.12+, [uv](https://docs.astral.sh/uv/), and a PostgreSQL database.
 
 ```bash
 uv sync
-uv run source-app --help
-uv run source-app --db-host localhost --db-user db_user --db-password db_password --db-name fh_dev --db-schema demo
+export DB_HOST=localhost DB_NAME=source_app DB_USER=source_app DB_PASSWORD=source_app
+uv run source-app migrate   # create the schema and tables
+uv run source-app seed      # load products, distribution centers and initial users
+uv run source-app run       # generate traffic until stopped
 ```
 
-Or with Docker:
+Or with Docker (the image runs `source-app run` by default):
 
 ```bash
 docker build -t source-app .
-docker run --rm source-app --help
+docker run --rm -e DB_HOST=... -e DB_PASSWORD=... source-app
 ```
+
+## Configuration
+
+Every setting comes from an environment variable, and a command-line flag of the same name overrides it (`source-app run --help` lists them).
+
+| Variable | Flag | Default |
+|---|---|---|
+| `DB_HOST`, `DB_PORT` | `--db-host`, `--db-port` | `localhost`, `5432` |
+| `DB_NAME`, `DB_USER`, `DB_PASSWORD` | `--db-name`, `--db-user`, `--db-password` | `source_app` |
+| `DB_SCHEMA` | `--db-schema` | `demo` |
+| `SIM_AVG_QPS` | `--avg-qps` | `20` purchases/second on average |
+| `SIM_MAX_ITER` | `--max-iter` | `-1` (run forever) |
+| `SIM_INIT_NUM_USERS` | `--init-num-users` | `1000` (used by `seed`) |
+
+The probabilities in the next table are set the same way (`SIM_USER_CREATE_PROB` / `--user-create-prob` and so on).
 
 ## What it generates
 
@@ -31,10 +48,10 @@ Each loop iteration (paced by `--avg-qps`) picks a user and writes an order, its
 
 | Task | Flag | Writes |
 |---|---|---|
-| New user | `--user-create-prob` | insert into `users` |
-| Address change | `--user-update-prob` | update `users` |
-| Order status change | `--order-update-prob` | update `orders` and `order_items`, insert cancel/return events |
-| Anonymous browsing | `--ghost-create-prob` | insert into `events` (no `user_id`) |
+| New user | `--user-create-prob` (0.05) | insert into `users` |
+| Address change | `--user-update-prob` (0.1) | update `users` |
+| Order status change | `--order-update-prob` (0.4) | update `orders` and `order_items`, insert cancel/return events |
+| Anonymous browsing | `--ghost-create-prob` (0.2) | insert into `events` (no `user_id`) |
 
 ## Development
 
