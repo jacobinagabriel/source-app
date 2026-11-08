@@ -70,6 +70,12 @@ make smoke     # containers end to end, with checks on the resulting data
 make down      # stop (make reset also deletes the data)
 ```
 
+## Infrastructure
+
+`infra/envs/prod` is this app's Terraform stack (state key `source-app/prod/terraform.tfstate`). It builds on [main-terraform](https://github.com/jacobinagabriel/main-terraform), which must be applied first: `infra/modules/shared` reads the shared VPC, subnets, this app's ECR repository and the IAM permissions boundary from SSM under `/main-terraform/prod/`. Every IAM role here must set that boundary (checked by checkov and enforced by AWS).
+
+CI (`terraform`) runs fmt, validate, tflint and checkov on every PR, and comments a plan once the GitHub OIDC roles are set up.
+
 ## Development
 
 ```bash

@@ -9,7 +9,12 @@ This repo is the source system for the CDC → Iceberg benchmark. The benchmark 
 | Source engine | RDS for PostgreSQL, single instance, version kept as a variable (prefer 17, else 16) |
 | Gate 0 (before A2) | Check that RDS for PostgreSQL supports zero-ETL to an Iceberg/lakehouse target in the chosen region, which engine versions, and which parameters. Pin the engine version to match |
 | If gate 0 fails | RDS for MySQL (engine is a variable), or zero-ETL to Redshift recorded as "not Iceberg" |
-| IaC | Terraform ≥ 1.10, S3 backend with `use_lockfile = true` |
+| IaC | Terraform ≥ 1.10, S3 backend with `use_lockfile = true`, state key `source-app/prod/terraform.tfstate` |
+| Environment | `prod` (the account's single environment) |
+| Shared layer | [main-terraform](https://github.com/jacobinagabriel/main-terraform) owns the VPC, the subnets, this app's ECR repository and the IAM permissions boundary, published under `/main-terraform/prod/*` in SSM. `infra/modules/shared` reads them |
+| Network placement | ECS tasks in public subnets with a public IP and no inbound rules (no NAT or interface endpoints, so $0 idle network cost); RDS in private subnets |
+| IAM | Every `aws_iam_role` sets `permissions_boundary` to `/main-terraform/prod/iam/app_role_boundary_arn`, and role names start with `source-app-`. AWS enforces both through the deploy role; checkov (`CKV2_CUSTOM_1`) flags it in review |
+| CI/CD | GitHub OIDC roles from main-terraform's `bootstrap/github-oidc`: plan comments on PRs; apply/destroy only in the `prod` environment, with your approval |
 | Language | Python 3.12, uv |
 | ORM and schema | SQLAlchemy 2.0 declarative models; Alembic migrations stored in this repo |
 | Tags | `Project=cdc-bench`, `Repo=source-app`, `Component=<x>`, `Pipeline=source` |
@@ -19,7 +24,7 @@ This repo is the source system for the CDC → Iceberg benchmark. The benchmark 
 | Parameter | Purpose |
 |---|---|
 | `contract_version` | `2` |
-| `vpc_id`, `private_subnet_ids` | Where the pipelines run |
+| `vpc_id`, `private_subnet_ids`, `public_subnet_ids` | Where the pipelines run (re-published from main-terraform, so the bench repo only depends on this contract) |
 | `db_instance_arn`, `db_instance_id` | Zero-ETL integration, DMS endpoint |
 | `db_endpoint`, `db_port`, `db_name` | Connections |
 | `db_engine`, `db_engine_version` | Compatibility checks |
@@ -38,7 +43,7 @@ Rules: this repo never creates anything CDC-specific (replication users, publica
 
 **A0. Bootstrap.** Repo, tooling, CI, branch protection.
 
-**A1. Networking.** VPC with 2 AZs and private subnets, VPC endpoints instead of a NAT gateway, option to reuse an existing VPC.
+**A1. Networking (moved to main-terraform).** The shared VPC (2 AZs, public and private subnets, S3 gateway endpoint, NAT and interface endpoints opt-in) lives in main-terraform. This repo reads it from SSM (`infra/modules/shared`).
 
 **A2. Database.** `aws_db_instance` (RDS PostgreSQL) with a DB parameter group: `rds.logical_replication=1` (needs a reboot), replication slot and WAL sender limits sized for 3 pipelines plus headroom, `max_slot_wal_keep_size` as a variable (default unlimited). Storage gp3 with autoscaling, plus alarms on `FreeStorageSpace`, `OldestReplicationSlotLag` and `TransactionLogsDiskUsage` sent to SNS. Admin and app secrets in Secrets Manager.
 

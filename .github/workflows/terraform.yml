@@ -1,0 +1,89 @@
+name: Terraform
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  terraform:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: 1.17.1
+      - uses: terraform-linters/setup-tflint@v6
+        with:
+          tflint_version: v0.66.0
+      - name: Format
+        run: terraform fmt -check -recursive -diff infra
+      - name: Validate
+        run: |
+          terraform -chdir=infra/envs/prod init -backend=false -input=false
+          terraform -chdir=infra/envs/prod validate
+      - name: Lint
+        run: |
+          tflint --init
+          tflint --chdir=infra --recursive --format compact
+      - name: Checkov
+        run: pipx run --spec checkov==3.4.3 checkov --config-file .checkov.yaml
+
+  # Runs once the bootstrap stack is applied and AWS_PLAN_ROLE_ARN is set as a repo
+  # variable. Uses the read-only plan role (trusted for pull_request only).
+  plan:
+    if: github.event_name == 'pull_request' && vars.AWS_PLAN_ROLE_ARN != ''
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v6
+      - uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: 1.17.1
+          terraform_wrapper: false
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ vars.AWS_PLAN_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
+      - name: Plan
+        id: plan
+        working-directory: infra/envs/prod
+        run: |
+          terraform init -input=false
+          set +e
+          terraform plan -input=false -no-color -lock-timeout=120s -detailed-exitcode -out tfplan > plan.log 2>&1
+          code=$?
+          set -e
+          cat plan.log
+          # 0 = no changes, 2 = changes, anything else = error
+          echo "exitcode=$code" >> "$GITHUB_OUTPUT"
+          [ "$code" -eq 0 ] || [ "$code" -eq 2 ]
+      - name: Comment the plan on the PR
+        if: always() && steps.plan.outputs.exitcode != ''
+        uses: actions/github-script@v9
+        env:
+          EXITCODE: ${{ steps.plan.outputs.exitcode }}
+        with:
+          script: |
+            const fs = require('fs');
+            const marker = '<!-- terraform-plan:infra/envs/prod -->';
+            let log = fs.readFileSync('infra/envs/prod/plan.log', 'utf8');
+            const limit = 60000;
+            if (log.length > limit) log = '…(truncated)…\n' + log.slice(-limit);
+            const status = { '0': 'no changes', '2': 'changes' }[process.env.EXITCODE] ?? 'failed';
+            const body = `${marker}\n### \`terraform plan\` infra/envs/prod: ${status}\n\n<details><summary>Plan output</summary>\n\n\`\`\`\n${log}\n\`\`\`\n</details>`;
+            const { owner, repo } = context.repo;
+            const issue_number = context.issue.number;
+            const comments = await github.paginate(github.rest.issues.listComments, { owner, repo, issue_number });
+            const existing = comments.find(c => c.body?.startsWith(marker));
+            if (existing) {
+              await github.rest.issues.updateComment({ owner, repo, comment_id: existing.id, body });
+            } else {
+              await github.rest.issues.createComment({ owner, repo, issue_number, body });
+            }
