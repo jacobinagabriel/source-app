@@ -1,0 +1,14 @@
+# Every role an app creates must carry the account's permissions boundary, so the
+# deploy pipeline can never mint a role more powerful than the boundary allows.
+# AWS enforces this too (the deploy role can only create bounded roles); this check
+# gives the same feedback earlier, in code review.
+metadata:
+  id: "CKV2_CUSTOM_1"
+  name: "IAM roles must set a permissions boundary"
+  category: "IAM"
+definition:
+  cond_type: "attribute"
+  resource_types:
+    - "aws_iam_role"
+  attribute: "permissions_boundary"
+  operator: "exists"

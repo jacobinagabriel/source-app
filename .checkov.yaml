@@ -1,0 +1,12 @@
+directory:
+  - infra
+framework:
+  - terraform
+external-checks-dir:
+  - .checkov/checks
+compact: true
+quiet: true
+skip-check:
+  # Registry modules are pinned by version and the lock file pins provider hashes;
+  # pinning registry modules by git commit isn't possible.
+  - CKV_TF_1
