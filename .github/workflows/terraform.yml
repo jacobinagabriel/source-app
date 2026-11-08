@@ -11,6 +11,9 @@ permissions:
 jobs:
   terraform:
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: infra
     steps:
       - uses: actions/checkout@v6
       - uses: hashicorp/setup-terraform@v4
@@ -20,15 +23,15 @@ jobs:
         with:
           tflint_version: v0.66.0
       - name: Format
-        run: terraform fmt -check -recursive -diff infra
+        run: terraform fmt -check -recursive -diff
       - name: Validate
         run: |
-          terraform -chdir=infra/envs/prod init -backend=false -input=false
-          terraform -chdir=infra/envs/prod validate
+          terraform -chdir=envs/prod init -backend=false -input=false
+          terraform -chdir=envs/prod validate
       - name: Lint
         run: |
           tflint --init
-          tflint --chdir=infra --recursive --format compact
+          tflint --recursive --format compact
       - name: Checkov
         run: pipx run --spec checkov==3.4.3 checkov --config-file .checkov.yaml
 
