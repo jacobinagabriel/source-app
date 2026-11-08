@@ -1,16 +1,14 @@
 import dataclasses
 import logging
-from typing import List, Union, Optional
+
+from psycopg2.extras import execute_values
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Connection
 from sqlalchemy.exc import OperationalError
-from psycopg2.extras import execute_values
 
-from src.models import User, Order, OrderItem, Event, get_additional_ddls
+from source_app.models import Event, Order, OrderItem, User, get_additional_ddls
 
-logging.basicConfig(
-    level=logging.INFO, format="[%(asctime)s] %(levelname)s: %(message)s"
-)
+logging.basicConfig(level=logging.INFO, format="[%(asctime)s] %(levelname)s: %(message)s")
 
 
 class DataWriter:
@@ -31,17 +29,17 @@ class DataWriter:
         self._password = password
         self._host = host
         self._db_name = db_name
-        self.conn: Optional[Connection] = None
+        self.conn: Connection | None = None
         self._connect()
 
     def select(
         self,
         table: str,
-        columns: Optional[List[str]] = None,
-        where_clause: Optional[str] = None,
-        where_params: Optional[tuple] = None,
-        order_by: Optional[str] = None,
-        limit: Optional[int] = None,
+        columns: list[str] | None = None,
+        where_clause: str | None = None,
+        where_params: tuple | None = None,
+        order_by: str | None = None,
+        limit: int | None = None,
     ):
         self._ensure_connection()
 
@@ -61,9 +59,9 @@ class DataWriter:
     def upsert(
         self,
         table: str,
-        data: List[Union[dict, object]],
-        conflict_keys: List[str],
-        update_fields: Optional[List[str]] = None,
+        data: list[dict | object],
+        conflict_keys: list[str],
+        update_fields: list[str] | None = None,
     ):
         if not data:
             logging.info(f"[{table}] No rows to insert.")
@@ -95,9 +93,7 @@ class DataWriter:
                     execute_values(cur, sql, values)
 
             self.conn.connection.commit()
-            logging.info(
-                f"[{table}] Inserted {len(rows)} rows in batches of {self.batch_size}."
-            )
+            logging.info(f"[{table}] Inserted {len(rows)} rows in batches of {self.batch_size}.")
 
         except Exception as e:
             logging.error(f"Upsert failed for {table}: {e}")
@@ -143,7 +139,7 @@ class DataWriter:
             self._connect()
 
     @staticmethod
-    def _normalize_rows(data: List[Union[dict, object]]) -> List[dict]:
+    def _normalize_rows(data: list[dict | object]) -> list[dict]:
         if not data:
             return []
         if dataclasses.is_dataclass(data[0]):
