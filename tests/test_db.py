@@ -69,3 +69,18 @@ def test_migrate_seed_and_run(db_settings):
         == 0
     )
     assert scalar(db_settings, "SELECT count(*) FROM events") > 0
+
+
+def test_random_rows_spread_across_the_table(db_settings):
+    # Runs after test_migrate_seed_and_run, so the schema has users and orders.
+    from source_app import repository
+    from source_app.db import make_sessionmaker
+
+    Session = make_sessionmaker(db_settings)
+    with Session() as session:
+        users = {repository.random_user(session).id for _ in range(50)}
+        orders = [repository.random_order(session) for _ in range(20)]
+    Session.kw["bind"].dispose()
+
+    assert len(users) > 10
+    assert all(order is not None and order.items for order in orders)
