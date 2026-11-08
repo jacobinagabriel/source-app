@@ -249,7 +249,7 @@ class TheLookECommSimulator:
                         f"Exceeded max consecutive DB error limit ({self.max_consecutive_errors}). "
                         "The simulation will now stop."
                     )
-                    break
+                    raise
                 await asyncio.sleep(5)
             else:
                 if self.consecutive_db_errors > 0:
