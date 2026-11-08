@@ -18,7 +18,6 @@ DB_FLAGS = {
     "--db-user": ("user", str, "Database user."),
     "--db-password": ("password", str, "Database password (prefer DB_PASSWORD)."),
     "--db-schema": ("schema_name", str, "Database schema."),
-    "--db-batch-size": ("batch_size", int, "Rows per INSERT batch."),
 }
 
 SIM_FLAGS = {
@@ -55,10 +54,12 @@ def build_parser() -> argparse.ArgumentParser:
         prog="source-app", description="Generate theLook eCommerce traffic in PostgreSQL."
     )
     commands = parser.add_subparsers(dest="command", required=True)
-    commands.add_parser("migrate", parents=[db_parent], help="Create the schema and tables.")
     commands.add_parser(
-        "seed", parents=[db_parent, sim_parent], help="Load reference data and initial users."
+        "migrate",
+        parents=[db_parent],
+        help="Apply database migrations (schema and reference data).",
     )
+    commands.add_parser("seed", parents=[db_parent, sim_parent], help="Create the initial users.")
     commands.add_parser("run", parents=[db_parent, sim_parent], help="Generate traffic.")
     return parser
 
