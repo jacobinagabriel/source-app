@@ -57,13 +57,26 @@ Each loop iteration (paced by `--avg-qps`) picks a user and writes an order, its
 
 The run logs a count of committed actions by type every 1,000 iterations and when it stops.
 
+## Local Postgres
+
+`docker-compose.yml` runs Postgres 17 with `wal_level=logical` (the same setting the RDS instance gets), so CDC tools can read from it too.
+
+```bash
+make up        # start Postgres
+make seed      # migrate + initial users, from the host
+make run ARGS="--avg-qps 50"
+make app       # or: migrate + generator in containers, the way ECS runs them
+make smoke     # containers end to end, with checks on the resulting data
+make down      # stop (make reset also deletes the data)
+```
+
 ## Development
 
 ```bash
 uv sync
 uv run pre-commit install
 uv run ruff check . && uv run ruff format --check .
-uv run pytest                 # DB tests run when DB_* points at a reachable Postgres
+uv run pytest                 # DB tests run when DB_* points at a reachable Postgres (make test)
 ```
 
 The schema is managed with SQLAlchemy models (`src/source_app/models.py`) and Alembic migrations (`src/source_app/migrations/`). After changing a model:

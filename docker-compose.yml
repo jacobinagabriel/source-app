@@ -1,0 +1,48 @@
+# Local stand-in for the RDS instance: same engine major, logical replication on,
+# so CDC tools (Debezium, DMS-like readers) can be pointed at it.
+services:
+  db:
+    image: postgres:17
+    command:
+      - postgres
+      - -c
+      - wal_level=logical
+      - -c
+      - max_replication_slots=10
+      - -c
+      - max_wal_senders=10
+    environment:
+      POSTGRES_DB: source_app
+      POSTGRES_USER: source_app
+      POSTGRES_PASSWORD: source_app
+    ports: ["5432:5432"]
+    volumes: ["pgdata:/var/lib/postgresql/data"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U source_app -d source_app"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+
+  app:
+    build: .
+    environment: &app-env
+      DB_HOST: db
+      DB_NAME: source_app
+      DB_USER: source_app
+      DB_PASSWORD: source_app
+      DB_SCHEMA: demo
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    command: ["run"]
+
+  migrate:
+    build: .
+    environment: *app-env
+    depends_on:
+      db:
+        condition: service_healthy
+    command: ["migrate"]
+
+volumes:
+  pgdata:
