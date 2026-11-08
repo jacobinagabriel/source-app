@@ -1,0 +1,11 @@
+source-app
+Copyright 2026 Gabriel Jacobina
+
+This product includes software developed by Factor House
+(https://github.com/factorhouse/examples), licensed under the Apache License,
+Version 2.0. The original code lives in `datagen/thelook-ecomm` of that
+repository, imported here with its commit history at upstream commit
+4f7537bb50e83fbc0134cf49b67344a39ae6bd97.
+
+The generator and its reference data (products, distribution centers) are based
+on the theLook eCommerce dataset published by Looker / Google Cloud.
