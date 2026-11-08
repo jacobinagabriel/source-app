@@ -1,18 +1,16 @@
 import argparse
 import asyncio
-import random
 import logging
+import random
 
 from faker import Faker
-from sqlalchemy.exc import SQLAlchemyError, OperationalError
+from sqlalchemy.exc import OperationalError, SQLAlchemyError
 
-from src.db_writer import DataWriter
-from src.models import User, Order, OrderItem, Event, OrderStatus, EventCategory
-from src.utils import generate_from_csv
+from source_app.db_writer import DataWriter
+from source_app.models import Event, EventCategory, Order, OrderItem, OrderStatus, User
+from source_app.utils import generate_from_csv
 
-logging.basicConfig(
-    level=logging.INFO, format="[%(asctime)s] %(levelname)s: %(message)s"
-)
+logging.basicConfig(level=logging.INFO, format="[%(asctime)s] %(levelname)s: %(message)s")
 
 
 class TheLookECommSimulator:
@@ -90,17 +88,12 @@ class TheLookECommSimulator:
             self.writer.select, table="users", order_by="RANDOM()", limit=1
         )
         if not user_list:
-            logging.warning(
-                "A random user is not retrieved. Skipping a purchase event generation."
-            )
+            logging.warning("A random user is not retrieved. Skipping a purchase event generation.")
             return
         random_user = User.from_dict(user_list[0])
 
         # Potentially update the user's address
-        if (
-            self.args.user_update_prob > 0
-            and random.random() < self.args.user_update_prob
-        ):
+        if self.args.user_update_prob > 0 and random.random() < self.args.user_update_prob:
             logging.info("Updating a user address...")
             random_user = random_user.update_address(
                 country=self.args.country,
@@ -152,13 +145,9 @@ class TheLookECommSimulator:
 
     def _simulate_order_update(self):
         """Synchronous helper containing the logic for updating an order. To be run in a thread."""
-        random_order_list = self.writer.select(
-            table="orders", order_by="RANDOM()", limit=1
-        )
+        random_order_list = self.writer.select(table="orders", order_by="RANDOM()", limit=1)
         if not random_order_list:
-            logging.warning(
-                "A random order is not retrieved. Skipping random order event upate."
-            )
+            logging.warning("A random order is not retrieved. Skipping random order event upate.")
             return
 
         random_order = Order.from_dict(random_order_list[0])
@@ -179,9 +168,7 @@ class TheLookECommSimulator:
         ]
 
         random_order.update_status(fake=self.fake)
-        updated_items = [
-            item.update_status(order=random_order) for item in random_items
-        ]
+        updated_items = [item.update_status(order=random_order) for item in random_items]
 
         random_events = []
         for item in updated_items:
@@ -202,9 +189,7 @@ class TheLookECommSimulator:
                 )
 
         self.writer.upsert(table="orders", data=[random_order], conflict_keys=["id"])
-        self.writer.upsert(
-            table="order_items", data=updated_items, conflict_keys=["id"]
-        )
+        self.writer.upsert(table="order_items", data=updated_items, conflict_keys=["id"])
         if random_events:
             self.writer.upsert(table="events", data=random_events, conflict_keys=["id"])
 
@@ -212,10 +197,7 @@ class TheLookECommSimulator:
         """Runs secondary simulation events based on their respective probabilities."""
         side_tasks = []
 
-        if (
-            self.args.user_create_prob > 0
-            and random.random() < self.args.user_create_prob
-        ):
+        if self.args.user_create_prob > 0 and random.random() < self.args.user_create_prob:
             logging.info("Creating a new user...")
             new_user = User.new(
                 country=self.args.country,
@@ -232,10 +214,7 @@ class TheLookECommSimulator:
                 )
             )
 
-        if (
-            self.args.ghost_create_prob > 0
-            and random.random() < self.args.ghost_create_prob
-        ):
+        if self.args.ghost_create_prob > 0 and random.random() < self.args.ghost_create_prob:
             logging.info("Creating a ghost event...")
             ghost_events = Event.new(
                 user=None,
@@ -252,10 +231,7 @@ class TheLookECommSimulator:
                 )
             )
 
-        if (
-            self.args.order_update_prob > 0
-            and random.random() < self.args.order_update_prob
-        ):
+        if self.args.order_update_prob > 0 and random.random() < self.args.order_update_prob:
             logging.info("Update an order status...")
             side_tasks.append(asyncio.to_thread(self._simulate_order_update))
 

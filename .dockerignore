@@ -1,0 +1,8 @@
+.git
+.venv
+.github
+.pytest_cache
+.ruff_cache
+images
+tests
+docs

@@ -1,19 +1,17 @@
-import datetime
 import dataclasses
-import random
-import logging
+import datetime
 import inspect
-from enum import Enum
+import logging
+import random
 from collections import OrderedDict
-from typing import List, Optional, Self
+from enum import Enum
+from typing import Self
 
 from faker import Faker
 
-from src.utils import get_location, get_product_map
+from source_app.utils import get_location, get_product_map
 
-logging.basicConfig(
-    level=logging.INFO, format="[%(asctime)s] %(levelname)s: %(message)s"
-)
+logging.basicConfig(level=logging.INFO, format="[%(asctime)s] %(levelname)s: %(message)s")
 
 
 PRODUCT_MAP = get_product_map("products.csv")
@@ -72,7 +70,7 @@ class ModelMixin:
         return cls(**filtered)
 
     @classmethod
-    def from_rows(cls, rows: List[dict]):
+    def from_rows(cls, rows: list[dict]):
         return [cls.from_dict(row) for row in rows]
 
 
@@ -105,9 +103,7 @@ class User(ModelMixin):
         fake: Faker,
     ) -> Self:
         gender = fake.random_element(elements=("M", "F"))
-        first_name = (
-            fake.first_name_male() if gender == "M" else fake.first_name_female()
-        )
+        first_name = fake.first_name_male() if gender == "M" else fake.first_name_female()
         last_name = fake.last_name_nonbinary()
         location = get_location(country=country, state=state, postal_code=postal_code)
         traffic_source = fake.random_choices(
@@ -115,6 +111,7 @@ class User(ModelMixin):
                 zip(
                     ["Organic", "Facebook", "Search", "Email", "Display"],
                     [0.15, 0.06, 0.7, 0.05, 0.04],
+                    strict=True,
                 )
             ),
             length=1,
@@ -189,10 +186,10 @@ class Order(ModelMixin):
     num_of_items: int
     created_at: datetime.datetime
     updated_at: datetime.datetime
-    returned_at: Optional[datetime.datetime]
-    shipped_at: Optional[datetime.datetime]
-    delivered_at: Optional[datetime.datetime]
-    cancelled_at: Optional[datetime.datetime]
+    returned_at: datetime.datetime | None
+    shipped_at: datetime.datetime | None
+    delivered_at: datetime.datetime | None
+    cancelled_at: datetime.datetime | None
 
     @classmethod
     def new(cls, user: User, fake: Faker) -> Self:
@@ -201,7 +198,7 @@ class Order(ModelMixin):
             user_id=user.id,
             status=OrderStatus.PROCESSING.value,
             num_of_items=fake.random_choices(
-                OrderedDict(zip([1, 2, 3, 4], [0.7, 0.2, 0.05, 0.05])),
+                OrderedDict(zip([1, 2, 3, 4], [0.7, 0.2, 0.05, 0.05], strict=True)),
                 1,
             )[0],
             created_at=datetime.datetime.now(),
@@ -281,10 +278,10 @@ class OrderItem(ModelMixin):
     sale_price: float
     created_at: datetime.datetime
     updated_at: datetime.datetime
-    returned_at: Optional[datetime.datetime]
-    shipped_at: Optional[datetime.datetime]
-    delivered_at: Optional[datetime.datetime]
-    cancelled_at: Optional[datetime.datetime]
+    returned_at: datetime.datetime | None
+    shipped_at: datetime.datetime | None
+    delivered_at: datetime.datetime | None
+    cancelled_at: datetime.datetime | None
 
     @classmethod
     def new(cls, order: Order, fake: Faker) -> Self:
@@ -340,7 +337,7 @@ class OrderItem(ModelMixin):
 @dataclasses.dataclass
 class Event(ModelMixin):
     id: str
-    user_id: Optional[str]
+    user_id: str | None
     sequence_number: int
     session_id: str
     ip_address: str
@@ -355,11 +352,11 @@ class Event(ModelMixin):
 
     @staticmethod
     def new(
-        user: Optional[User],
-        order_item: Optional[OrderItem],
+        user: User | None,
+        order_item: OrderItem | None,
         event_category: str,
         fake: Faker,
-    ) -> List[Self]:
+    ) -> list[Self]:
         if event_category in ["purchase", "return", "cancel"]:
             assert order_item is not None
             user_id = user.id
@@ -408,6 +405,7 @@ class Event(ModelMixin):
                 zip(
                     ["IE", "Edge", "Chrome", "Safari", "Firefox", "Other"],
                     [0.05, 0.1, 0.45, 0.2, 0.15, 0.05],
+                    strict=True,
                 )
             ),
             1,
@@ -417,6 +415,7 @@ class Event(ModelMixin):
                 zip(
                     ["Email", "Adwords", "Organic", "YouTube", "Facebook"],
                     [0.45, 0.3, 0.05, 0.1, 0.1],
+                    strict=True,
                 )
             ),
             1,
@@ -435,8 +434,7 @@ class Event(ModelMixin):
                 traffic_source=traffic_source,
                 uri=Event._generate_uri(event_type, order_item_id, product_id),
                 event_type=event_type,
-                created_at=created_at
-                - Event._calculate_event_delay(len(event_types), idx, fake),
+                created_at=created_at - Event._calculate_event_delay(len(event_types), idx, fake),
             )
             for idx, event_type in enumerate(event_types)
         ]
@@ -446,7 +444,7 @@ class Event(ModelMixin):
         return f"Event(id={self.id}, is_ghost={self.user_id is None}, sequence_number={self.sequence_number}, event_type={self.event_type}, created_at={self.created_at})"
 
     @staticmethod
-    def _generate_uri(event_type: str, item_id: Optional[str], product_id: int) -> str:
+    def _generate_uri(event_type: str, item_id: str | None, product_id: int) -> str:
         if event_type == "product":
             return f"/{event_type}/{product_id}"
         elif event_type == "department":
@@ -454,18 +452,12 @@ class Event(ModelMixin):
             category = PRODUCT_MAP[product_id]["category"]
             return f"/{event_type}/{department}/category/{category}"
         elif event_type in ["cancel", "return"]:
-            return (
-                f"/{event_type}/item/{item_id}"
-                if item_id is not None
-                else f"/{event_type}"
-            )
+            return f"/{event_type}/item/{item_id}" if item_id is not None else f"/{event_type}"
         else:
             return f"/{event_type}"
 
     @staticmethod
-    def _calculate_event_delay(
-        num_events: int, idx: int, fake: Faker
-    ) -> datetime.timedelta:
+    def _calculate_event_delay(num_events: int, idx: int, fake: Faker) -> datetime.timedelta:
         if num_events == idx + 1:
             return datetime.timedelta(seconds=0)
         base_delay = (num_events - idx + 1) * 20
