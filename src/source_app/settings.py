@@ -43,3 +43,7 @@ class SimulationSettings(BaseSettings):
     user_update_prob: float = 0.1
     order_update_prob: float = 0.4
     ghost_create_prob: float = 0.2
+    order_delete_prob: float = 0.05
+    ghost_purge_prob: float = 0.05
+    ghost_retention_minutes: int = 60
+    ghost_purge_batch: int = 100

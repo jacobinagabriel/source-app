@@ -1,9 +1,10 @@
+import datetime
 import uuid
 
-from sqlalchemy import Select, select
+from sqlalchemy import Select, delete, select
 from sqlalchemy.orm import Session, joinedload, selectinload
 
-from source_app.models import Order, User
+from source_app.models import Event, Order, OrderStatus, User, utcnow
 
 
 def _random_row(session: Session, stmt: Select, id_column):
@@ -28,3 +29,20 @@ def random_user(session: Session) -> User | None:
 def random_order(session: Session) -> Order | None:
     stmt = select(Order).options(joinedload(Order.user), selectinload(Order.items))
     return _random_row(session, stmt, Order.id)
+
+
+def random_cancelled_order(session: Session) -> Order | None:
+    stmt = select(Order).where(Order.status == OrderStatus.CANCELLED.value)
+    return _random_row(session, stmt, Order.id)
+
+
+def purge_ghost_events(session: Session, older_than: datetime.timedelta, limit: int) -> int:
+    """Deletes up to `limit` of the oldest anonymous events older than `older_than`."""
+    oldest = (
+        select(Event.id)
+        .where(Event.user_id.is_(None), Event.created_at < utcnow() - older_than)
+        .order_by(Event.created_at)
+        .limit(limit)
+    )
+    result = session.execute(delete(Event).where(Event.id.in_(oldest)))
+    return result.rowcount

@@ -31,6 +31,22 @@ SIM_FLAGS = {
     "--user-update-prob": ("user_update_prob", float, "Probability of a user address change."),
     "--order-update-prob": ("order_update_prob", float, "Probability of an order status change."),
     "--ghost-create-prob": ("ghost_create_prob", float, "Probability of an anonymous session."),
+    "--order-delete-prob": (
+        "order_delete_prob",
+        float,
+        "Probability of deleting a cancelled order.",
+    ),
+    "--ghost-purge-prob": (
+        "ghost_purge_prob",
+        float,
+        "Probability of purging old anonymous events.",
+    ),
+    "--ghost-retention-minutes": (
+        "ghost_retention_minutes",
+        int,
+        "Anonymous events older than this can be purged.",
+    ),
+    "--ghost-purge-batch": ("ghost_purge_batch", int, "Max anonymous events deleted per purge."),
 }
 
 

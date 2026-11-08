@@ -8,7 +8,7 @@ from enum import Enum
 from typing import Self
 
 from faker import Faker
-from sqlalchemy import BigInteger, DateTime, ForeignKey, Integer, Numeric, Text
+from sqlalchemy import BigInteger, DateTime, ForeignKey, Index, Integer, Numeric, Text, text
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 from source_app.utils import get_location, get_product_map
@@ -159,6 +159,10 @@ class User(Base):
 
 class Order(Base):
     __tablename__ = "orders"
+    __table_args__ = (
+        # Lets the delete task pick a random cancelled order without scanning.
+        Index("ix_orders_cancelled_id", "id", postgresql_where=text("status = 'Cancelled'")),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True)
     user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"), index=True)
@@ -290,6 +294,10 @@ class OrderItem(Base):
 
 class Event(Base):
     __tablename__ = "events"
+    __table_args__ = (
+        # Lets the purge task find old anonymous events without scanning.
+        Index("ix_events_ghost_created_at", "created_at", postgresql_where=text("user_id IS NULL")),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True)
     user_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id"), index=True)
