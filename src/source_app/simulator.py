@@ -1,4 +1,3 @@
-import argparse
 import asyncio
 import logging
 import random
@@ -8,6 +7,7 @@ from sqlalchemy.exc import OperationalError, SQLAlchemyError
 
 from source_app.db_writer import DataWriter
 from source_app.models import Event, EventCategory, Order, OrderItem, OrderStatus, User
+from source_app.settings import DatabaseSettings, SimulationSettings
 from source_app.utils import generate_from_csv
 
 logging.basicConfig(level=logging.INFO, format="[%(asctime)s] %(levelname)s: %(message)s")
@@ -18,68 +18,52 @@ class TheLookECommSimulator:
     Manages the state and execution of the e-commerce data generation simulation.
     """
 
-    def __init__(self, args: argparse.Namespace, fake: Faker):
+    def __init__(self, db: DatabaseSettings, sim: SimulationSettings, fake: Faker):
         """Initializes the simulator and the DataWriter."""
-        self.args = args
+        self.sim = sim
         self.fake = fake
-        self.writer = DataWriter(
-            args.db_user,
-            args.db_password,
-            args.db_host,
-            args.db_name,
-            args.db_schema,
-            args.db_batch_size,
-        )
+        self.writer = DataWriter(db.url(), db.schema_name, db.batch_size, db.echo)
         self.consecutive_db_errors = 0
         self.max_consecutive_errors = 3
 
-    async def initialize(self):
-        """
-        Performs the one-time setup for the simulation.
-        This includes creating database tables, loading initial data, and creating Kafka topics.
-        """
-        try:
-            logging.info("Setting up database schema...")
-            await asyncio.to_thread(self.writer.create_tables_if_not_exists)
+    async def migrate(self):
+        """Creates the schema and tables if they don't exist."""
+        logging.info("Setting up database schema...")
+        await asyncio.to_thread(self.writer.create_tables_if_not_exists)
+        logging.info("Schema is ready.")
 
-            logging.info("Writing initial data...")
-            init_users = [
-                User.new(
-                    country=self.args.country,
-                    state=self.args.state,
-                    postal_code=self.args.postal_code,
-                    fake=self.fake,
-                )
-                for _ in range(self.args.init_num_users)
-            ]
+    async def seed(self):
+        """Loads reference data (products, distribution centers) and the initial users."""
+        init_users = [
+            User.new(
+                country=self.sim.country,
+                state=self.sim.state,
+                postal_code=self.sim.postal_code,
+                fake=self.fake,
+            )
+            for _ in range(self.sim.init_num_users)
+        ]
+        logging.info(f"Writing {len(init_users)} initial users...")
+        await asyncio.to_thread(
+            self.writer.upsert, table="users", data=init_users, conflict_keys=["id"]
+        )
 
-            logging.info(f"Writing {len(init_users)} initial users...")
-            await asyncio.to_thread(
-                self.writer.upsert, table="users", data=init_users, conflict_keys=["id"]
-            )
+        logging.info("Writing products...")
+        await asyncio.to_thread(
+            self.writer.upsert,
+            table="products",
+            data=generate_from_csv("products.csv"),
+            conflict_keys=["id"],
+        )
 
-            logging.info("Writing initial products...")
-            await asyncio.to_thread(
-                self.writer.upsert,
-                table="products",
-                data=generate_from_csv("products.csv"),
-                conflict_keys=["id"],
-            )
-
-            logging.info("Writing initial distribution centers...")
-            await asyncio.to_thread(
-                self.writer.upsert,
-                table="dist_centers",
-                data=generate_from_csv("distribution_centers.csv"),
-                conflict_keys=["id"],
-            )
-            logging.info("Initialization successful.")
-            return True
-        except (SQLAlchemyError, OperationalError) as e:
-            logging.critical(
-                f"A fatal error occurred during initial setup. Cannot continue. Error: {e}"
-            )
-            return False
+        logging.info("Writing distribution centers...")
+        await asyncio.to_thread(
+            self.writer.upsert,
+            table="dist_centers",
+            data=generate_from_csv("distribution_centers.csv"),
+            conflict_keys=["id"],
+        )
+        logging.info("Seeding finished.")
 
     async def _simulate_purchases(self):
         """Generates and writes a new purchase transaction, the primary simulation event."""
@@ -93,12 +77,12 @@ class TheLookECommSimulator:
         random_user = User.from_dict(user_list[0])
 
         # Potentially update the user's address
-        if self.args.user_update_prob > 0 and random.random() < self.args.user_update_prob:
+        if self.sim.user_update_prob > 0 and random.random() < self.sim.user_update_prob:
             logging.info("Updating a user address...")
             random_user = random_user.update_address(
-                country=self.args.country,
-                state=self.args.state,
-                postal_code=self.args.postal_code,
+                country=self.sim.country,
+                state=self.sim.state,
+                postal_code=self.sim.postal_code,
                 fake=self.fake,
             )
             await asyncio.to_thread(
@@ -197,12 +181,12 @@ class TheLookECommSimulator:
         """Runs secondary simulation events based on their respective probabilities."""
         side_tasks = []
 
-        if self.args.user_create_prob > 0 and random.random() < self.args.user_create_prob:
+        if self.sim.user_create_prob > 0 and random.random() < self.sim.user_create_prob:
             logging.info("Creating a new user...")
             new_user = User.new(
-                country=self.args.country,
-                state=self.args.state,
-                postal_code=self.args.postal_code,
+                country=self.sim.country,
+                state=self.sim.state,
+                postal_code=self.sim.postal_code,
                 fake=self.fake,
             )
             side_tasks.append(
@@ -214,7 +198,7 @@ class TheLookECommSimulator:
                 )
             )
 
-        if self.args.ghost_create_prob > 0 and random.random() < self.args.ghost_create_prob:
+        if self.sim.ghost_create_prob > 0 and random.random() < self.sim.ghost_create_prob:
             logging.info("Creating a ghost event...")
             ghost_events = Event.new(
                 user=None,
@@ -231,7 +215,7 @@ class TheLookECommSimulator:
                 )
             )
 
-        if self.args.order_update_prob > 0 and random.random() < self.args.order_update_prob:
+        if self.sim.order_update_prob > 0 and random.random() < self.sim.order_update_prob:
             logging.info("Update an order status...")
             side_tasks.append(asyncio.to_thread(self._simulate_order_update))
 
@@ -242,14 +226,14 @@ class TheLookECommSimulator:
         """The main simulation loop, which orchestrates primary and side tasks."""
         current_iteration = 0
         while True:
-            if 0 < self.args.max_iter <= current_iteration:
+            if 0 < self.sim.max_iter <= current_iteration:
                 logging.info(
                     f"Stopping data generation after reaching {current_iteration} iterations."
                 )
                 break
 
             try:
-                wait_time = random.expovariate(self.args.avg_qps)
+                wait_time = random.expovariate(self.sim.avg_qps)
                 await asyncio.sleep(wait_time)
 
                 await self._simulate_purchases()
@@ -282,64 +266,3 @@ class TheLookECommSimulator:
         if self.writer.conn and not self.writer.conn.closed:
             await asyncio.to_thread(self.writer.close)
         logging.info("Database connection closed.")
-
-
-async def run_simulation(args: argparse.Namespace):
-    """Orchestrates the creation, initialization, and execution of the simulator."""
-    simulator = TheLookECommSimulator(args, Faker())
-    try:
-        if await simulator.initialize():
-            await simulator.run()
-    except asyncio.CancelledError:
-        logging.warning("Data generation task was cancelled.")
-    finally:
-        await simulator.close()
-
-
-def main():
-    """
-    Parses command-line arguments and starts the data generation simulation.
-    """
-    # fmt: off
-    parser = argparse.ArgumentParser(description="Generate theLook eCommerce data")
-    ## --- General Arguments ---
-    parser.add_argument("--avg-qps", type=float, default=20.0, help="Average events per second.")
-    parser.add_argument("--max-iter", type=int, default=-1, help="Max number of successful iterations. Default -1 for infinite.")
-    ## --- User Arguments ---
-    parser.add_argument("--init-num-users", type=int, default=1000, help="Initial number of users to create.")
-    parser.add_argument("--country", default="*", help="User country.")
-    parser.add_argument("--state", default="*", help="User state.")
-    parser.add_argument("--postal-code", default="*", help="User postal code.")
-    parser.add_argument("--user-create-prob", type=float, default=0.05, help="Probability of generating a new user. Default is 0.05. Set to 0 to disable.")
-    parser.add_argument("--user-update-prob", type=float, default=0.1, help="Probability of updating a user address. Default is 0.1. Set to 0 to disable.")
-    ## --- Order Arguments ---
-    parser.add_argument("--order-update-prob", type=float, default=0.4, help="Probability of updating an order status. Default is 0.4. Set to 0 to disable.")
-    ## --- Ghost Event Arguments ---
-    parser.add_argument("--ghost-create-prob", type=float, default=0.2, help="Probability of generating a ghost event. Default is 0.2. Set to 0 to disable.")
-    ## --- Database Arguments ---
-    parser.add_argument("--db-host", default="localhost", help="Database host.")
-    parser.add_argument("--db-user", default="db_user", help="Database user.")
-    parser.add_argument("--db-password", default="db_password", help="Database password.")
-    parser.add_argument("--db-name", default="fh_dev", help="Database name.")
-    parser.add_argument("--db-schema", default="demo", help="Database schema.")
-    parser.add_argument("--db-batch-size", type=int, default=1000)
-    ## --- Kafka Arguments ---
-    parser.add_argument("--bootstrap-servers", type=str, default="localhost:9092", help="Bootstrap server addresses.")
-    parser.add_argument("--topic-prefix", type=str, default="ecomm", help="Kafka topic prefix.")
-    # fmt: on
-
-    args = parser.parse_args()
-    logging.info(args)
-
-    try:
-        asyncio.run(run_simulation(args))
-    except KeyboardInterrupt:
-        logging.warning("Data generator stopped by user.")
-    except Exception as e:
-        logging.critical(f"An unexpected top-level error occurred: {e}", exc_info=True)
-    finally:
-        logging.info("Application shutdown complete.")
-
-
-if __name__ == "__main__":
-    main()

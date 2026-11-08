@@ -8,12 +8,13 @@ license-files = ["LICENSE", "NOTICE"]
 requires-python = ">=3.12"
 dependencies = [
     "faker",
+    "pydantic-settings",
     "psycopg2-binary",
     "sqlalchemy>=2.0",
 ]
 
 [project.scripts]
-source-app = "source_app.simulator:main"
+source-app = "source_app.cli:main"
 
 [dependency-groups]
 dev = [
