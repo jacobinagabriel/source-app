@@ -54,7 +54,7 @@ Rules: this repo never creates anything CDC-specific (replication users, publica
 
 1. Tooling: package layout, uv, ruff, pre-commit, pytest, CI, Dockerfile, README, this plan.
 2. Config: remove Kafka arguments, settings from env vars, CLI subcommands `migrate`, `seed`, `run`.
-3. ORM + Alembic: declarative models with `uuid`, `timestamptz`, `numeric`, foreign keys; initial schema and reference-data migrations.
-4. Transactions and sampling: one transaction per business action, indexed random row selection.
+3. ORM + Alembic: declarative models with `uuid`, `timestamptz`, `numeric`, foreign keys; initial schema and reference-data migrations; one transaction per business action (the foreign keys require it). Migrations live in the package (`src/source_app/migrations/`) so the image can run them without extra files.
+4. Sampling: indexed random row selection instead of `ORDER BY random()`.
 5. Deletes: delete cancelled orders (items cascade) and purge old anonymous events.
 6. Local dev: docker-compose Postgres with `wal_level=logical`, Makefile, integration test.

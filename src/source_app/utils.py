@@ -4,6 +4,7 @@ import functools
 import logging
 import os
 import random
+from decimal import Decimal
 
 from sqlalchemy.exc import SQLAlchemyError
 
@@ -23,11 +24,11 @@ def generate_from_csv(file_name: str) -> list[dict]:
     return records
 
 
-def get_product_map(file_nmae: str = "products.csv"):
+def get_product_map(file_name: str = "products.csv"):
     prod_map = {}
-    for product in generate_from_csv(file_nmae):
-        prod_map[product["id"]] = {
-            "retail_price": product["retail_price"],
+    for product in generate_from_csv(file_name):
+        prod_map[int(product["id"])] = {
+            "retail_price": Decimal(product["retail_price"]).quantize(Decimal("0.01")),
             "department": product["department"].lower(),
             "category": product["category"].lower(),
         }

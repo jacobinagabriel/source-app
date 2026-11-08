@@ -1,13 +1,15 @@
-import dataclasses
 import datetime
-import inspect
 import logging
 import random
+import uuid
 from collections import OrderedDict
+from decimal import Decimal
 from enum import Enum
 from typing import Self
 
 from faker import Faker
+from sqlalchemy import BigInteger, DateTime, ForeignKey, Integer, Numeric, Text
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 from source_app.utils import get_location, get_product_map
 
@@ -16,34 +18,18 @@ logging.basicConfig(level=logging.INFO, format="[%(asctime)s] %(levelname)s: %(m
 
 PRODUCT_MAP = get_product_map("products.csv")
 
+Money = Numeric(12, 2)
 
-def get_additional_ddls(schema: str):
-    return {
-        "products": inspect.cleandoc(f"""
-            CREATE TABLE IF NOT EXISTS {schema}.products (
-                id BIGINT PRIMARY KEY,
-                cost DOUBLE PRECISION,
-                category TEXT,
-                name TEXT,
-                brand TEXT,
-                retail_price DOUBLE PRECISION,
-                department TEXT,
-                sku TEXT,
-                distribution_center_id BIGINT
-            );"""),
-        "dist_centers": inspect.cleandoc(f"""
-            CREATE TABLE IF NOT EXISTS {schema}.dist_centers (
-                id BIGINT PRIMARY KEY,
-                name TEXT,
-                latitude DOUBLE PRECISION,
-                longitude DOUBLE PRECISION
-            );"""),
-        "heartbeat": inspect.cleandoc(f"""
-            CREATE TABLE IF NOT EXISTS {schema}.heartbeat (
-                id INT PRIMARY KEY,
-                ts TIMESTAMP WITHOUT TIME ZONE NOT NULL DEFAULT NOW()
-            );
-        """),
+
+def utcnow() -> datetime.datetime:
+    return datetime.datetime.now(datetime.UTC)
+
+
+class Base(DeclarativeBase):
+    type_annotation_map = {
+        str: Text(),
+        int: Integer(),
+        datetime.datetime: DateTime(timezone=True),
     }
 
 
@@ -62,36 +48,48 @@ class EventCategory(Enum):
     RETURN = "return"
 
 
-class ModelMixin:
-    @classmethod
-    def from_dict(cls, data: dict):
-        valid_keys = {f.name for f in dataclasses.fields(cls)}
-        filtered = {k: v for k, v in data.items() if k in valid_keys}
-        return cls(**filtered)
+class DistributionCenter(Base):
+    __tablename__ = "dist_centers"
 
-    @classmethod
-    def from_rows(cls, rows: list[dict]):
-        return [cls.from_dict(row) for row in rows]
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=False)
+    name: Mapped[str]
+    latitude: Mapped[float]
+    longitude: Mapped[float]
 
 
-@dataclasses.dataclass
-class User(ModelMixin):
-    id: str
-    first_name: str
-    last_name: str
-    email: str
-    age: int
-    gender: str
-    street_address: str
-    postal_code: str
-    city: str
-    state: str
-    country: str
-    latitude: float
-    longitude: float
-    traffic_source: str
-    created_at: datetime.datetime
-    updated_at: datetime.datetime
+class Product(Base):
+    __tablename__ = "products"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=False)
+    cost: Mapped[Decimal] = mapped_column(Money)
+    category: Mapped[str]
+    name: Mapped[str | None]
+    brand: Mapped[str | None]
+    retail_price: Mapped[Decimal] = mapped_column(Money)
+    department: Mapped[str]
+    sku: Mapped[str]
+    distribution_center_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("dist_centers.id"))
+
+
+class User(Base):
+    __tablename__ = "users"
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True)
+    first_name: Mapped[str]
+    last_name: Mapped[str]
+    email: Mapped[str]
+    age: Mapped[int]
+    gender: Mapped[str]
+    street_address: Mapped[str]
+    postal_code: Mapped[str]
+    city: Mapped[str]
+    state: Mapped[str]
+    country: Mapped[str]
+    latitude: Mapped[float]
+    longitude: Mapped[float]
+    traffic_source: Mapped[str]
+    created_at: Mapped[datetime.datetime]
+    updated_at: Mapped[datetime.datetime]
 
     @classmethod
     def new(
@@ -116,8 +114,9 @@ class User(ModelMixin):
             ),
             length=1,
         )[0]
+        now = utcnow()
         return cls(
-            id=fake.uuid4(),
+            id=uuid.uuid4(),
             first_name=first_name,
             last_name=last_name,
             email=f"{first_name.lower()}.{last_name.lower()}@{fake.safe_domain_name()}",
@@ -128,11 +127,11 @@ class User(ModelMixin):
             city=location["city"],
             state=location["state"],
             country=location["country"],
-            latitude=location["latitude"],
-            longitude=location["longitude"],
+            latitude=float(location["latitude"]),
+            longitude=float(location["longitude"]),
             traffic_source=traffic_source,
-            created_at=datetime.datetime.now(),
-            updated_at=datetime.datetime.now(),
+            created_at=now,
+            updated_at=now,
         )
 
     def update_address(
@@ -143,66 +142,53 @@ class User(ModelMixin):
         postal_code: str = "*",
         fake: Faker,
     ) -> Self:
-        current_data = dataclasses.asdict(self)
-        updated_fields = {
-            "street_address": fake.street_address(),
-            **get_location(country=country, state=state, postal_code=postal_code),
-        }
-        merged_data = {**current_data, **updated_fields}
-        return self.from_dict(merged_data)
+        location = get_location(country=country, state=state, postal_code=postal_code)
+        self.street_address = fake.street_address()
+        self.postal_code = location["postal_code"]
+        self.city = location["city"]
+        self.state = location["state"]
+        self.country = location["country"]
+        self.latitude = float(location["latitude"])
+        self.longitude = float(location["longitude"])
+        self.updated_at = utcnow()
+        return self
 
     def __str__(self):
         return f"User(id={self.id}, name='{self.first_name} {self.last_name}', location='{self.country}|{self.state}|{self.city}', source='{self.traffic_source}')"
 
-    @staticmethod
-    def ddl(schema: str):
-        return inspect.cleandoc(f"""
-        CREATE TABLE IF NOT EXISTS {schema}.users (
-            id              TEXT PRIMARY KEY,
-            first_name      TEXT,
-            last_name       TEXT,
-            email           TEXT,
-            age             INT,
-            gender          TEXT,
-            street_address  TEXT,
-            postal_code     TEXT,
-            city            TEXT,
-            state           TEXT,
-            country         TEXT,
-            latitude        DOUBLE PRECISION,
-            longitude       DOUBLE PRECISION,
-            traffic_source  TEXT,
-            created_at      TIMESTAMP WITHOUT TIME ZONE,
-            updated_at      TIMESTAMP WITHOUT TIME ZONE
-        );
-        """)
 
+class Order(Base):
+    __tablename__ = "orders"
 
-@dataclasses.dataclass
-class Order(ModelMixin):
-    id: str
-    user_id: str
-    status: str
-    num_of_items: int
-    created_at: datetime.datetime
-    updated_at: datetime.datetime
-    returned_at: datetime.datetime | None
-    shipped_at: datetime.datetime | None
-    delivered_at: datetime.datetime | None
-    cancelled_at: datetime.datetime | None
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True)
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"), index=True)
+    status: Mapped[str]
+    num_of_items: Mapped[int]
+    created_at: Mapped[datetime.datetime]
+    updated_at: Mapped[datetime.datetime]
+    returned_at: Mapped[datetime.datetime | None]
+    shipped_at: Mapped[datetime.datetime | None]
+    delivered_at: Mapped[datetime.datetime | None]
+    cancelled_at: Mapped[datetime.datetime | None]
+
+    user: Mapped[User] = relationship()
+    items: Mapped[list["OrderItem"]] = relationship(
+        back_populates="order", cascade="all, delete-orphan", passive_deletes=True
+    )
 
     @classmethod
     def new(cls, user: User, fake: Faker) -> Self:
+        now = utcnow()
         return cls(
-            id=fake.uuid4(),
-            user_id=user.id,
+            id=uuid.uuid4(),
+            user=user,
             status=OrderStatus.PROCESSING.value,
             num_of_items=fake.random_choices(
                 OrderedDict(zip([1, 2, 3, 4], [0.7, 0.2, 0.05, 0.05], strict=True)),
                 1,
             )[0],
-            created_at=datetime.datetime.now(),
-            updated_at=datetime.datetime.now(),
+            created_at=now,
+            updated_at=now,
             returned_at=None,
             shipped_at=None,
             delivered_at=None,
@@ -227,68 +213,56 @@ class Order(ModelMixin):
             )
             if new_status == OrderStatus.SHIPPED.value:
                 self.status = OrderStatus.SHIPPED.value
-                self.shipped_at = datetime.datetime.now()
+                self.shipped_at = utcnow()
             else:
                 self.status = OrderStatus.CANCELLED.value
-                self.cancelled_at = datetime.datetime.now()
+                self.cancelled_at = utcnow()
             status_changed = True
 
         elif self.status == OrderStatus.SHIPPED.value:
             # Deterministic transition from Shipped to Delivered
             self.status = OrderStatus.DELIVERED.value
-            self.delivered_at = datetime.datetime.now()
+            self.delivered_at = utcnow()
             status_changed = True
 
         elif self.status == OrderStatus.DELIVERED.value:
             # Probabilistic transition from Delivered to Returned
             if random.random() < return_probability:
                 self.status = OrderStatus.RETURNED.value
-                self.returned_at = datetime.datetime.now()
+                self.returned_at = utcnow()
                 status_changed = True
 
         if status_changed:
-            self.updated_at = datetime.datetime.now()
+            self.updated_at = utcnow()
         return self
 
-    @staticmethod
-    def ddl(schema: str):
-        return inspect.cleandoc(f"""
-        CREATE TABLE IF NOT EXISTS {schema}.orders (
-            id              TEXT PRIMARY KEY,
-            user_id         TEXT,
-            status          TEXT,
-            num_of_items    INT,
-            created_at      TIMESTAMP WITHOUT TIME ZONE,
-            updated_at      TIMESTAMP WITHOUT TIME ZONE,
-            returned_at     TIMESTAMP WITHOUT TIME ZONE,
-            shipped_at      TIMESTAMP WITHOUT TIME ZONE,
-            delivered_at    TIMESTAMP WITHOUT TIME ZONE,
-            cancelled_at    TIMESTAMP WITHOUT TIME ZONE
-        );
-        """)
 
+class OrderItem(Base):
+    __tablename__ = "order_items"
 
-@dataclasses.dataclass
-class OrderItem(ModelMixin):
-    id: str
-    order_id: str
-    product_id: int
-    status: str
-    quantity: int
-    sale_price: float
-    created_at: datetime.datetime
-    updated_at: datetime.datetime
-    returned_at: datetime.datetime | None
-    shipped_at: datetime.datetime | None
-    delivered_at: datetime.datetime | None
-    cancelled_at: datetime.datetime | None
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True)
+    order_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("orders.id", ondelete="CASCADE"), index=True
+    )
+    product_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("products.id"))
+    status: Mapped[str]
+    quantity: Mapped[int]
+    sale_price: Mapped[Decimal] = mapped_column(Money)
+    created_at: Mapped[datetime.datetime]
+    updated_at: Mapped[datetime.datetime]
+    shipped_at: Mapped[datetime.datetime | None]
+    delivered_at: Mapped[datetime.datetime | None]
+    returned_at: Mapped[datetime.datetime | None]
+    cancelled_at: Mapped[datetime.datetime | None]
+
+    order: Mapped[Order] = relationship(back_populates="items")
 
     @classmethod
     def new(cls, order: Order, fake: Faker) -> Self:
-        product_id = fake.random_element(PRODUCT_MAP.keys())
+        product_id = fake.random_element(list(PRODUCT_MAP.keys()))
         return cls(
-            id=fake.uuid4(),
-            order_id=order.id,
+            id=uuid.uuid4(),
+            order=order,
             product_id=product_id,
             status=order.status,
             quantity=fake.random_element(range(1, 4)),
@@ -306,7 +280,6 @@ class OrderItem(ModelMixin):
 
     def update_status(self, order: Order) -> Self:
         self.status = order.status
-        self.created_at = order.created_at
         self.updated_at = order.updated_at
         self.shipped_at = order.shipped_at
         self.delivered_at = order.delivered_at
@@ -314,41 +287,23 @@ class OrderItem(ModelMixin):
         self.cancelled_at = order.cancelled_at
         return self
 
-    @staticmethod
-    def ddl(schema: str):
-        return inspect.cleandoc(f"""
-        CREATE TABLE IF NOT EXISTS {schema}.order_items (
-            id              TEXT PRIMARY KEY,
-            order_id        TEXT,
-            product_id      BIGINT,
-            status          TEXT,
-            quantity        INT,
-            sale_price      DOUBLE PRECISION,
-            created_at      TIMESTAMP WITHOUT TIME ZONE,
-            updated_at      TIMESTAMP WITHOUT TIME ZONE,
-            shipped_at      TIMESTAMP WITHOUT TIME ZONE,
-            delivered_at    TIMESTAMP WITHOUT TIME ZONE,
-            returned_at     TIMESTAMP WITHOUT TIME ZONE,
-            cancelled_at    TIMESTAMP WITHOUT TIME ZONE
-        );
-        """)
 
+class Event(Base):
+    __tablename__ = "events"
 
-@dataclasses.dataclass
-class Event(ModelMixin):
-    id: str
-    user_id: str | None
-    sequence_number: int
-    session_id: str
-    ip_address: str
-    city: str
-    state: str
-    postal_code: str
-    browser: str
-    traffic_source: str
-    uri: str
-    event_type: str
-    created_at: datetime.datetime
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True)
+    user_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id"), index=True)
+    sequence_number: Mapped[int]
+    session_id: Mapped[uuid.UUID]
+    ip_address: Mapped[str]
+    city: Mapped[str]
+    state: Mapped[str]
+    postal_code: Mapped[str]
+    browser: Mapped[str]
+    traffic_source: Mapped[str]
+    uri: Mapped[str]
+    event_type: Mapped[str]
+    created_at: Mapped[datetime.datetime]
 
     @staticmethod
     def new(
@@ -371,7 +326,7 @@ class Event(ModelMixin):
                     set(fake.random_choices(["home", "department", "product"], 3))
                 ) + ["cart", "purchase"]
             else:
-                created_at = datetime.datetime.now()
+                created_at = utcnow()
                 event_types = ["product", "cart", event_category]
         elif event_category == "ghost":
             location = get_location()
@@ -379,9 +334,9 @@ class Event(ModelMixin):
             city = location["city"]
             state = location["state"]
             postal_code = location["postal_code"]
-            product_id = fake.random_element(PRODUCT_MAP.keys())
+            product_id = fake.random_element(list(PRODUCT_MAP.keys()))
             order_item_id = None
-            created_at = datetime.datetime.now()
+            created_at = utcnow()
             event_types = fake.random_elements(
                 [
                     "home",
@@ -398,7 +353,7 @@ class Event(ModelMixin):
             raise RuntimeError(
                 f"Unsupported event category: '{event_category}'. Allowed categories are: {', '.join(sorted(['purchase', 'cancel', 'ghost']))}."
             )
-        session_id = fake.uuid4()
+        session_id = uuid.uuid4()
         ip_address = fake.ipv4()
         browser = fake.random_choices(
             OrderedDict(
@@ -422,7 +377,7 @@ class Event(ModelMixin):
         )[0]
         events = [
             Event(
-                id=fake.uuid4(),
+                id=uuid.uuid4(),
                 user_id=user_id,
                 sequence_number=idx + 1,
                 session_id=session_id,
@@ -444,7 +399,7 @@ class Event(ModelMixin):
         return f"Event(id={self.id}, is_ghost={self.user_id is None}, sequence_number={self.sequence_number}, event_type={self.event_type}, created_at={self.created_at})"
 
     @staticmethod
-    def _generate_uri(event_type: str, item_id: str | None, product_id: int) -> str:
+    def _generate_uri(event_type: str, item_id: uuid.UUID | None, product_id: int) -> str:
         if event_type == "product":
             return f"/{event_type}/{product_id}"
         elif event_type == "department":
@@ -463,23 +418,3 @@ class Event(ModelMixin):
         base_delay = (num_events - idx + 1) * 20
         jitter = fake.random_element(range(1, 10))
         return datetime.timedelta(seconds=base_delay + jitter)
-
-    @staticmethod
-    def ddl(schema: str):
-        return inspect.cleandoc(f"""
-        CREATE TABLE IF NOT EXISTS {schema}.events (
-            id                  TEXT PRIMARY KEY,
-            user_id             TEXT,
-            sequence_number     INT,
-            session_id          TEXT,
-            ip_address          TEXT,
-            city                TEXT,
-            state               TEXT,
-            postal_code         TEXT,
-            browser             TEXT,
-            traffic_source      TEXT,
-            uri                 TEXT,
-            event_type          TEXT,
-            created_at          TIMESTAMP WITHOUT TIME ZONE
-        );
-        """)

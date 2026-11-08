@@ -15,7 +15,6 @@ class DatabaseSettings(BaseSettings):
     password: SecretStr = SecretStr("source_app")
     # `schema` clashes with a BaseModel attribute, so the field gets another name.
     schema_name: str = Field("demo", validation_alias="DB_SCHEMA")
-    batch_size: int = 1000
     echo: bool = False
 
     def url(self) -> URL:

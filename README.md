@@ -15,8 +15,8 @@ Needs Python 3.12+, [uv](https://docs.astral.sh/uv/), and a PostgreSQL database.
 ```bash
 uv sync
 export DB_HOST=localhost DB_NAME=source_app DB_USER=source_app DB_PASSWORD=source_app
-uv run source-app migrate   # create the schema and tables
-uv run source-app seed      # load products, distribution centers and initial users
+uv run source-app migrate   # apply Alembic migrations: schema, products, distribution centers
+uv run source-app seed      # create the initial users
 uv run source-app run       # generate traffic until stopped
 ```
 
@@ -44,7 +44,7 @@ The probabilities in the next table are set the same way (`SIM_USER_CREATE_PROB`
 
 ## What it generates
 
-Each loop iteration (paced by `--avg-qps`) picks a user and writes an order, its items and the web events leading to the purchase. Side tasks run with their own probabilities:
+Each loop iteration (paced by `--avg-qps`) picks a user and writes an order, its items and the web events leading to the purchase, in one transaction. Side tasks run with their own probabilities, each in its own transaction:
 
 | Task | Flag | Writes |
 |---|---|---|
@@ -59,7 +59,14 @@ Each loop iteration (paced by `--avg-qps`) picks a user and writes an order, its
 uv sync
 uv run pre-commit install
 uv run ruff check . && uv run ruff format --check .
-uv run pytest
+uv run pytest                 # DB tests run when DB_* points at a reachable Postgres
+```
+
+The schema is managed with SQLAlchemy models (`src/source_app/models.py`) and Alembic migrations (`src/source_app/migrations/`). After changing a model:
+
+```bash
+uv run alembic revision --autogenerate -m "describe the change"
+uv run alembic upgrade head
 ```
 
 Changes land through pull requests into `main`. CI (`ci`) must pass before a PR can be merged.
