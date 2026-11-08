@@ -1,6 +1,9 @@
 import asyncio
+import datetime
 import logging
 import random
+import threading
+from collections import Counter
 
 from alembic import command
 from alembic.config import Config
@@ -30,6 +33,13 @@ class TheLookECommSimulator:
         self.Session = make_sessionmaker(db)
         self.consecutive_db_errors = 0
         self.max_consecutive_errors = 3
+        # Committed business actions by type, logged periodically and at the end of `run`.
+        self.stats: Counter[str] = Counter()
+        self._stats_lock = threading.Lock()
+
+    def _count(self, action: str, n: int = 1) -> None:
+        with self._stats_lock:
+            self.stats[action] += n
 
     async def migrate(self):
         """Applies all Alembic migrations (schema and reference data)."""
@@ -59,8 +69,9 @@ class TheLookECommSimulator:
         with self.Session.begin() as session:
             session.add_all(rows)
 
-    def _simulate_purchase(self):
+    def _simulate_purchase(self) -> None:
         """Writes a new order, its items and the events leading to it."""
+        address_updated = False
         with self.Session.begin() as session:
             user = repository.random_user(session)
             if user is None:
@@ -76,6 +87,7 @@ class TheLookECommSimulator:
                     postal_code=self.sim.postal_code,
                     fake=self.fake,
                 )
+                address_updated = True
 
             order = Order.new(user=user, fake=self.fake)
             for _ in range(order.num_of_items):
@@ -89,6 +101,9 @@ class TheLookECommSimulator:
                     )
                 )
             session.add(order)
+        self._count("order_created")
+        if address_updated:
+            self._count("user_address_updated")
 
     def _simulate_order_update(self):
         """Moves a random order to its next status, with cancel/return events."""
@@ -98,6 +113,7 @@ class TheLookECommSimulator:
                 logging.warning("No orders found. Skipping an order status update.")
                 return
 
+            previous_status = order.status
             order.update_status(fake=self.fake)
             for item in order.items:
                 item.update_status(order=order)
@@ -117,6 +133,23 @@ class TheLookECommSimulator:
                             fake=self.fake,
                         )
                     )
+        if order.status != previous_status:
+            self._count("order_status_updated")
+
+    def _create_user(self) -> None:
+        self._add_all([self._new_user()])
+        self._count("user_created")
+
+    def _create_ghost_session(self) -> None:
+        self._add_all(
+            Event.new(
+                user=None,
+                order_item=None,
+                event_category=EventCategory.GHOST.value,
+                fake=self.fake,
+            )
+        )
+        self._count("ghost_session_created")
 
     async def _simulate_side_tasks(self):
         """Runs secondary simulation events based on their respective probabilities."""
@@ -124,24 +157,50 @@ class TheLookECommSimulator:
 
         if self.sim.user_create_prob > 0 and random.random() < self.sim.user_create_prob:
             logging.info("Creating a new user...")
-            side_tasks.append(asyncio.to_thread(self._add_all, [self._new_user()]))
+            side_tasks.append(asyncio.to_thread(self._create_user))
 
         if self.sim.ghost_create_prob > 0 and random.random() < self.sim.ghost_create_prob:
             logging.info("Creating a ghost event...")
-            ghost_events = Event.new(
-                user=None,
-                order_item=None,
-                event_category=EventCategory.GHOST.value,
-                fake=self.fake,
-            )
-            side_tasks.append(asyncio.to_thread(self._add_all, ghost_events))
+            side_tasks.append(asyncio.to_thread(self._create_ghost_session))
 
         if self.sim.order_update_prob > 0 and random.random() < self.sim.order_update_prob:
             logging.info("Update an order status...")
             side_tasks.append(asyncio.to_thread(self._simulate_order_update))
 
+        if self.sim.order_delete_prob > 0 and random.random() < self.sim.order_delete_prob:
+            side_tasks.append(asyncio.to_thread(self._delete_cancelled_order))
+
+        if self.sim.ghost_purge_prob > 0 and random.random() < self.sim.ghost_purge_prob:
+            side_tasks.append(asyncio.to_thread(self._purge_ghost_events))
+
         if side_tasks:
             await asyncio.gather(*side_tasks)
+
+    def _delete_cancelled_order(self) -> None:
+        """Deletes a random cancelled order; the database cascades to its items."""
+        with self.Session.begin() as session:
+            order = repository.random_cancelled_order(session)
+            if order is None:
+                return
+            logging.info(f"Deleting cancelled order {order.id}...")
+            session.delete(order)
+        self._count("order_deleted")
+
+    def _purge_ghost_events(self) -> None:
+        """Deletes a batch of anonymous events past their retention."""
+        with self.Session.begin() as session:
+            deleted = repository.purge_ghost_events(
+                session,
+                older_than=datetime.timedelta(minutes=self.sim.ghost_retention_minutes),
+                limit=self.sim.ghost_purge_batch,
+            )
+        if deleted:
+            logging.info(f"Purged {deleted} old anonymous events.")
+        self._count("ghost_event_purged", deleted)
+
+    def log_stats(self) -> None:
+        summary = ", ".join(f"{k}={v}" for k, v in sorted(self.stats.items()))
+        logging.info(f"Actions so far: {summary or 'none'}")
 
     async def run(self):
         """The main simulation loop, which orchestrates primary and side tasks."""
@@ -179,6 +238,9 @@ class TheLookECommSimulator:
                     )
                 self.consecutive_db_errors = 0
                 current_iteration += 1
+                if current_iteration % 1000 == 0:
+                    self.log_stats()
+        self.log_stats()
         logging.info("Simulation loop has finished.")
 
     async def close(self):

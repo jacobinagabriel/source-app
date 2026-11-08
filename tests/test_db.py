@@ -38,25 +38,34 @@ def scalar(db: DatabaseSettings, sql: str) -> int:
     return value
 
 
-def run(db: DatabaseSettings, command: str, **sim) -> None:
+def run(db: DatabaseSettings, command: str, **sim) -> TheLookECommSimulator:
     Faker.seed(7)
     simulator = TheLookECommSimulator(db, SimulationSettings(**sim), Faker())
     try:
         asyncio.run(getattr(simulator, command)())
     finally:
         asyncio.run(simulator.close())
+    return simulator
 
 
 def test_migrate_seed_and_run(db_settings):
     run(db_settings, "migrate")
-    assert scalar(db_settings, "SELECT version_num FROM alembic_version") == "0002"
+    assert scalar(db_settings, "SELECT version_num FROM alembic_version") == "0003"
     assert scalar(db_settings, "SELECT count(*) FROM products") == 29120
     assert scalar(db_settings, "SELECT count(*) FROM dist_centers") == 10
 
     run(db_settings, "seed", init_num_users=50)
     assert scalar(db_settings, "SELECT count(*) FROM users") == 50
 
-    run(db_settings, "run", max_iter=100, avg_qps=1000, order_update_prob=0.9)
+    run(
+        db_settings,
+        "run",
+        max_iter=100,
+        avg_qps=1000,
+        order_update_prob=0.9,
+        order_delete_prob=0,
+        ghost_purge_prob=0,
+    )
     assert scalar(db_settings, "SELECT count(*) FROM orders") == 100
     assert scalar(db_settings, "SELECT count(*) FROM orders WHERE status <> 'Processing'") > 0
     # Every order's items carry the order's status.
@@ -84,3 +93,54 @@ def test_random_rows_spread_across_the_table(db_settings):
 
     assert len(users) > 10
     assert all(order is not None and order.items for order in orders)
+
+
+def test_deletes_cancelled_orders_and_purges_ghost_events(db_settings):
+    # Runs after test_migrate_seed_and_run. Cancel five orders by hand so the delete
+    # task has something to pick, whatever the random status changes did.
+    engine = create_engine(
+        db_settings.url(), connect_args={"options": f"-c search_path={db_settings.schema_name}"}
+    )
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                "UPDATE orders SET status = 'Cancelled', cancelled_at = now()"
+                " WHERE id IN (SELECT id FROM orders WHERE status <> 'Cancelled' LIMIT 5)"
+            )
+        )
+    engine.dispose()
+    cancelled_before = scalar(db_settings, "SELECT count(*) FROM orders WHERE status = 'Cancelled'")
+    ghosts_before = scalar(db_settings, "SELECT count(*) FROM events WHERE user_id IS NULL")
+    assert ghosts_before > 0
+
+    simulator = run(
+        db_settings,
+        "run",
+        max_iter=3,
+        avg_qps=1000,
+        user_create_prob=0,
+        user_update_prob=0,
+        order_update_prob=0,
+        ghost_create_prob=0,
+        order_delete_prob=1,
+        ghost_purge_prob=1,
+        ghost_retention_minutes=0,
+        ghost_purge_batch=1000,
+    )
+
+    assert simulator.stats["order_deleted"] == 3
+    assert (
+        scalar(db_settings, "SELECT count(*) FROM orders WHERE status = 'Cancelled'")
+        == cancelled_before - 3
+    )
+    # Items of deleted orders went with them (ON DELETE CASCADE).
+    assert (
+        scalar(
+            db_settings,
+            "SELECT count(*) FROM order_items i LEFT JOIN orders o ON o.id = i.order_id"
+            " WHERE o.id IS NULL",
+        )
+        == 0
+    )
+    assert simulator.stats["ghost_event_purged"] == ghosts_before
+    assert scalar(db_settings, "SELECT count(*) FROM events WHERE user_id IS NULL") == 0

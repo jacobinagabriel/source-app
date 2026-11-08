@@ -52,6 +52,10 @@ Each loop iteration (paced by `--avg-qps`) picks a user and writes an order, its
 | Address change | `--user-update-prob` (0.1) | update `users` |
 | Order status change | `--order-update-prob` (0.4) | update `orders` and `order_items`, insert cancel/return events |
 | Anonymous browsing | `--ghost-create-prob` (0.2) | insert into `events` (no `user_id`) |
+| Delete a cancelled order | `--order-delete-prob` (0.05) | delete from `orders`, cascading to `order_items` |
+| Purge old anonymous events | `--ghost-purge-prob` (0.05) | delete up to `--ghost-purge-batch` (100) `events` older than `--ghost-retention-minutes` (60) |
+
+The run logs a count of committed actions by type every 1,000 iterations and when it stops.
 
 ## Development
 
