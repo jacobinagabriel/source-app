@@ -74,7 +74,7 @@ make down      # stop (make reset also deletes the data)
 
 `infra/envs/prod` is this app's Terraform stack (state key `source-app/prod/terraform.tfstate`). It builds on [main-terraform](https://github.com/jacobinagabriel/main-terraform), which must be applied first: `infra/modules/shared` reads the shared VPC, subnets, this app's ECR repository and the IAM permissions boundary from SSM under `/main-terraform/prod/`. Every IAM role here must set that boundary (checked by checkov and enforced by AWS).
 
-CI (`terraform`) runs fmt, validate, tflint and checkov on every PR, and comments a plan once the GitHub OIDC roles are set up.
+CI (`terraform`) runs fmt, validate, tflint and checkov on every PR, and comments a plan once the GitHub OIDC roles are set up. Everything Terraform-related lives under `infra/`, including the tflint (`.tflint.hcl`) and checkov (`.checkov.yaml`, `.checkov/checks/`) config, so run those tools from there.
 
 ## Development
 

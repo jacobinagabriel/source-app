@@ -7,12 +7,3 @@ dist/
 build/
 *.egg-info/
 .env
-
-# Terraform
-.terraform/
-*.tfstate
-*.tfstate.*
-*.tfplan
-tfplan
-plan.log
-*.tfvars
