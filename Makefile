@@ -9,7 +9,7 @@ export DB_SCHEMA ?= demo
 export DB_ADMIN_USER ?= postgres
 export DB_ADMIN_PASSWORD ?= postgres
 
-.PHONY: help up down reset db-init migrate seed run app lint test smoke
+.PHONY: help up down reset db-init migrate seed run app lint test smoke contract-check
 
 help: ## List targets
 	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*## "}; {printf "  %-8s %s\n", $$1, $$2}'
@@ -46,3 +46,6 @@ test: up ## Unit and database tests against the compose Postgres (as the admin)
 
 smoke: ## Containers end to end: migrate, seed, run, then check the data
 	./scripts/smoke.sh
+
+contract-check: ## Check the SSM contract on AWS (needs AWS_PROFILE; ENV=prod)
+	./scripts/contract-check.sh

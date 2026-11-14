@@ -74,3 +74,8 @@ output "task_log_group_name" {
   description = "Task logs"
   value       = module.service.log_group_name
 }
+
+output "schema_version_parameter" {
+  description = "SSM parameter the deploy workflow writes the Alembic revision to"
+  value       = module.contract.schema_version_parameter
+}
