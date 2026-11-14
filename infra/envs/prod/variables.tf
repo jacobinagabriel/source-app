@@ -21,3 +21,14 @@ variable "alarm_email" {
   type        = string
   default     = ""
 }
+
+variable "image_tag" {
+  description = "Image tag to deploy; the deploy workflow passes the git SHA it built"
+  type        = string
+}
+
+variable "generator_env" {
+  description = "SIM_* settings of the generator, e.g. { SIM_AVG_QPS = \"50\" }"
+  type        = map(string)
+  default     = {}
+}

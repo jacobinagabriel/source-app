@@ -37,3 +37,40 @@ output "db_engine_version" {
   description = "Running Aurora PostgreSQL version"
   value       = module.database.engine_version
 }
+
+# Read by the deploy workflow (terraform output -json) to run the ops tasks and roll
+# the service.
+output "ecs_cluster_name" {
+  description = "ECS cluster"
+  value       = module.service.cluster_name
+}
+
+output "ecs_service_name" {
+  description = "Generator service"
+  value       = module.service.service_name
+}
+
+output "generator_task_definition_arn" {
+  description = "Generator task definition for the deployed image"
+  value       = module.service.generator_task_definition_arn
+}
+
+output "ops_task_definition_arn" {
+  description = "Ops task definition (db-init, migrate, seed)"
+  value       = module.service.ops_task_definition_arn
+}
+
+output "task_subnet_ids" {
+  description = "Subnets for the tasks"
+  value       = module.service.subnet_ids
+}
+
+output "task_security_group_id" {
+  description = "Security group for the tasks"
+  value       = module.service.app_security_group_id
+}
+
+output "task_log_group_name" {
+  description = "Task logs"
+  value       = module.service.log_group_name
+}

@@ -59,8 +59,11 @@ jobs:
         working-directory: infra/envs/prod
         run: |
           terraform init -input=false
+          # Plan against the image that's deployed (the contract records it); when
+          # the stack is down there's none, and any tag plans the same resources.
+          tag=$(aws ssm get-parameter --name /source-app/prod/image_tag --query Parameter.Value --output text 2>/dev/null || echo not-deployed)
           set +e
-          terraform plan -input=false -no-color -lock-timeout=120s -detailed-exitcode -out tfplan > plan.log 2>&1
+          terraform plan -input=false -no-color -lock-timeout=120s -detailed-exitcode -var "image_tag=$tag" -out tfplan > plan.log 2>&1
           code=$?
           set -e
           cat plan.log
