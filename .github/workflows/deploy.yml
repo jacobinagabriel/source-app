@@ -1,0 +1,182 @@
+name: Deploy
+
+# Brings source-app up for a benchmark and down afterwards. Runs only from main, in
+# the "prod" GitHub Environment (your approval), with the OIDC deploy role.
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: "up: build, apply, migrate and start the generator. down: destroy everything"
+        type: choice
+        options: [up, down]
+        default: up
+      generator_count:
+        description: "Generator tasks to run (up only; 0 keeps the database without traffic)"
+        type: number
+        default: 1
+      avg_qps:
+        description: "Average purchases per second per generator task (up only)"
+        type: string
+        default: "20"
+
+concurrency:
+  group: source-app-prod
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  TF_DIR: infra/envs/prod
+  CONTRACT: /source-app/prod
+
+jobs:
+  up:
+    if: inputs.action == 'up' && github.ref == 'refs/heads/main'
+    # Native ARM64, the architecture of the Fargate tasks.
+    runs-on: ubuntu-24.04-arm
+    environment: prod
+    steps:
+      - uses: actions/checkout@v6
+      - uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: 1.17.1
+          terraform_wrapper: false
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
+          role-duration-seconds: 7200
+
+      - name: Build and push the image
+        run: |
+          repo=$(aws ssm get-parameter --name /main-terraform/prod/ecr/source-app/repository_url --query Parameter.Value --output text)
+          # Tags are immutable, so a commit that was already deployed reuses its image.
+          if aws ecr describe-images --repository-name "${repo#*/}" --image-ids "imageTag=$GITHUB_SHA" >/dev/null 2>&1; then
+            echo "Image $GITHUB_SHA already in ECR"
+          else
+            aws ecr get-login-password | docker login --username AWS --password-stdin "${repo%%/*}"
+            docker build -t "$repo:$GITHUB_SHA" .
+            docker push "$repo:$GITHUB_SHA"
+          fi
+
+      - name: Plan
+        working-directory: ${{ env.TF_DIR }}
+        env:
+          AVG_QPS: ${{ inputs.avg_qps }}
+        run: |
+          terraform init -input=false
+          terraform plan -input=false -no-color -lock-timeout=120s \
+            -var "image_tag=$GITHUB_SHA" -var "generator_env={SIM_AVG_QPS=\"$AVG_QPS\"}" \
+            -out tfplan | tee plan.log
+          { echo '### Plan'; echo '```'; tail -c 60000 plan.log; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Apply
+        working-directory: ${{ env.TF_DIR }}
+        run: terraform apply -input=false -lock-timeout=120s tfplan
+
+      # The same order as docker-compose: db-init (as the admin), then migrate and
+      # seed (as the app user). seed does nothing when users exist.
+      - name: Run db-init, migrate and seed
+        working-directory: ${{ env.TF_DIR }}
+        run: |
+          out=$(terraform output -json)
+          cluster=$(jq -r .ecs_cluster_name.value <<<"$out")
+          ops=$(jq -r .ops_task_definition_arn.value <<<"$out")
+          subnets=$(jq -r '.task_subnet_ids.value | join(",")' <<<"$out")
+          sg=$(jq -r .task_security_group_id.value <<<"$out")
+          logs=$(jq -r .task_log_group_name.value <<<"$out")
+
+          run_ops() {
+            echo "::group::$1"
+            task=$(aws ecs run-task --cluster "$cluster" --task-definition "$ops" --launch-type FARGATE \
+              --network-configuration "awsvpcConfiguration={subnets=[$subnets],securityGroups=[$sg],assignPublicIp=ENABLED}" \
+              --overrides "{\"containerOverrides\":[{\"name\":\"source-app\",\"command\":[\"$1\"]}]}" \
+              --query 'tasks[0].taskArn' --output text)
+            aws ecs wait tasks-stopped --cluster "$cluster" --tasks "$task"
+            code=$(aws ecs describe-tasks --cluster "$cluster" --tasks "$task" --query 'tasks[0].containers[0].exitCode' --output text)
+            aws logs tail "$logs" --log-stream-names "source-app/source-app/${task##*/}" --since 1h || true
+            echo "::endgroup::"
+            if [ "$code" != 0 ]; then
+              echo "::error::$1 failed with exit code $code (logs: $logs)"
+              exit 1
+            fi
+          }
+          run_ops db-init
+          run_ops migrate
+          run_ops seed
+
+      - name: Record the schema version in the contract
+        run: |
+          # The head revision: the only one no other migration revises.
+          head=$(python3 - <<'PY'
+          import pathlib, re
+          revs, downs = set(), set()
+          for f in pathlib.Path("src/source_app/migrations/versions").glob("*.py"):
+              text = f.read_text()
+              revs |= set(re.findall(r'^revision: str = "(\w+)"', text, re.M))
+              downs |= set(re.findall(r'^down_revision: .* = "(\w+)"', text, re.M))
+          (head,) = revs - downs
+          print(head)
+          PY
+          )
+          aws ssm put-parameter --name "$CONTRACT/schema_version" --value "$head" --type String --overwrite >/dev/null
+          echo "schema_version=$head"
+
+      - name: Roll out the generator
+        working-directory: ${{ env.TF_DIR }}
+        env:
+          COUNT: ${{ inputs.generator_count }}
+        run: |
+          out=$(terraform output -json)
+          cluster=$(jq -r .ecs_cluster_name.value <<<"$out")
+          service=$(jq -r .ecs_service_name.value <<<"$out")
+          generator=$(jq -r .generator_task_definition_arn.value <<<"$out")
+          aws ecs update-service --cluster "$cluster" --service "$service" \
+            --task-definition "$generator" --desired-count "$COUNT" >/dev/null
+          aws ecs wait services-stable --cluster "$cluster" --services "$service"
+          {
+            echo "### source-app is up"
+            echo "- image: \`$GITHUB_SHA\`"
+            echo "- generator tasks: $COUNT"
+            echo "- contract: \`$CONTRACT\` (check with \`make contract-check\`)"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  down:
+    if: inputs.action == 'down' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: prod
+    steps:
+      - uses: actions/checkout@v6
+      - uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: 1.17.1
+          terraform_wrapper: false
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
+          role-duration-seconds: 7200
+
+      # Teardown order is bench first: its pipelines hold replication slots and
+      # security group rules on this database.
+      - name: Refuse while the bench is deployed
+        run: |
+          count=$(aws ssm get-parameters-by-path --path /cdc-iceberg-bench/prod --recursive --query 'length(Parameters)' --output text)
+          if [ "$count" != 0 ]; then
+            echo "::error::cdc-iceberg-bench still has $count parameters under /cdc-iceberg-bench/prod; tear it down first."
+            exit 1
+          fi
+
+      - name: Plan the destroy
+        working-directory: ${{ env.TF_DIR }}
+        run: |
+          terraform init -input=false
+          tag=$(aws ssm get-parameter --name "$CONTRACT/image_tag" --query Parameter.Value --output text 2>/dev/null || echo not-deployed)
+          terraform plan -destroy -input=false -no-color -lock-timeout=120s -var "image_tag=$tag" -out tfplan | tee plan.log
+          { echo '### Destroy plan'; echo '```'; tail -c 60000 plan.log; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Destroy
+        working-directory: ${{ env.TF_DIR }}
+        run: terraform apply -input=false -lock-timeout=120s tfplan
