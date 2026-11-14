@@ -80,6 +80,22 @@ make down      # stop (make reset also deletes the data)
 
 CI (`terraform`) runs fmt, validate, tflint and checkov on every PR, and comments a plan once the GitHub OIDC roles are set up. Everything Terraform-related lives under `infra/`, including the tflint (`.tflint.hcl`) and checkov (`.checkov.yaml`, `.checkov/checks/`) config, so run those tools from there.
 
+## Deploying
+
+**Actions → Deploy → Run workflow** on `main`, then approve the `prod` deployment. It uses the GitHub OIDC deploy role from main-terraform, so there are no AWS keys anywhere.
+
+- **up** does five things in order:
+  1. Builds the ARM64 image, tagged with the commit SHA, and pushes it to ECR.
+  2. Applies `infra/envs/prod` (Aurora PostgreSQL 17, the ECS generator, the SSM contract).
+  3. Runs `db-init`, `migrate` and `seed` as one-off ECS tasks.
+  4. Records the schema version.
+  5. Starts `generator_count` generator tasks at `avg_qps`.
+
+  Running it again deploys the current commit the same way.
+- **down** refuses while `cdc-iceberg-bench` is deployed, then destroys everything. Only the ECR images remain.
+
+While up, it costs roughly $0.09/hour (Aurora `db.t4g.medium` plus one Fargate task). Down, it costs about $0. Check the contract the bench repo reads with `make contract-check` (needs `AWS_PROFILE`).
+
 ## Development
 
 ```bash
