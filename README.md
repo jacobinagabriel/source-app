@@ -2,7 +2,7 @@
 
 A minimal OLTP traffic generator for PostgreSQL. It simulates an e-commerce shop (users, orders, order items, web events) and writes inserts, updates and deletes straight to the database, so a change data capture (CDC) pipeline has a realistic source to read from.
 
-It is the source system for a benchmark that compares three ways of replicating RDS PostgreSQL changes into Apache Iceberg on AWS (DMS, zero-ETL and Debezium). The plan lives in [docs/PLAN.md](docs/PLAN.md). This repo knows nothing about CDC: it only offers a database worth replicating.
+It is the source system for a benchmark that compares three ways of replicating Aurora PostgreSQL changes into Apache Iceberg on AWS (DMS, zero-ETL and Debezium). The plan lives in [docs/PLAN.md](docs/PLAN.md). This repo knows nothing about CDC: it only offers a database worth replicating.
 
 ## Credit
 
@@ -59,7 +59,7 @@ The run logs a count of committed actions by type every 1,000 iterations and whe
 
 ## Local Postgres
 
-`docker-compose.yml` runs Postgres 17 with `wal_level=logical` (the same setting the RDS instance gets), so CDC tools can read from it too.
+`docker-compose.yml` runs Postgres 17 with `wal_level=logical` (Aurora gets logical replication through its cluster parameter group), so CDC tools can read from it too.
 
 ```bash
 make up        # start Postgres
