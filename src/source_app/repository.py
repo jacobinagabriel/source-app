@@ -22,6 +22,10 @@ def _random_row(session: Session, stmt: Select, id_column):
     return row
 
 
+def has_users(session: Session) -> bool:
+    return session.scalars(select(User.id).limit(1)).first() is not None
+
+
 def random_user(session: Session) -> User | None:
     return _random_row(session, select(User), User.id)
 

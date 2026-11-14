@@ -6,7 +6,8 @@ import pytest
 from faker import Faker
 from sqlalchemy import create_engine, text
 
-from source_app.settings import DatabaseSettings, SimulationSettings
+from source_app.admin import init_database
+from source_app.settings import AdminSettings, DatabaseSettings, SimulationSettings
 from source_app.simulator import TheLookECommSimulator
 
 
@@ -50,10 +51,13 @@ def run(db: DatabaseSettings, command: str, **sim) -> TheLookECommSimulator:
 
 def test_migrate_seed_and_run(db_settings):
     run(db_settings, "migrate")
-    assert scalar(db_settings, "SELECT version_num FROM alembic_version") == "0003"
+    assert scalar(db_settings, "SELECT version_num FROM alembic_version") == "0004"
     assert scalar(db_settings, "SELECT count(*) FROM products") == 29120
     assert scalar(db_settings, "SELECT count(*) FROM dist_centers") == 10
 
+    run(db_settings, "seed", init_num_users=50)
+    assert scalar(db_settings, "SELECT count(*) FROM users") == 50
+    # A second seed is a no-op, so deploys can always run it.
     run(db_settings, "seed", init_num_users=50)
     assert scalar(db_settings, "SELECT count(*) FROM users") == 50
 
@@ -133,7 +137,7 @@ def test_deletes_cancelled_orders_and_purges_ghost_events(db_settings):
         scalar(db_settings, "SELECT count(*) FROM orders WHERE status = 'Cancelled'")
         == cancelled_before - 3
     )
-    # Items of deleted orders went with them (ON DELETE CASCADE).
+    # Items of deleted orders went with them (deleted by the app; the key doesn't cascade).
     assert (
         scalar(
             db_settings,
@@ -144,3 +148,53 @@ def test_deletes_cancelled_orders_and_purges_ghost_events(db_settings):
     )
     assert simulator.stats["ghost_event_purged"] == ghosts_before
     assert scalar(db_settings, "SELECT count(*) FROM events WHERE user_id IS NULL") == 0
+
+
+def test_foreign_keys_do_not_cascade(db_settings):
+    # Runs after test_migrate_seed_and_run. Zero-ETL fails tables with cascading keys.
+    assert (
+        scalar(
+            db_settings,
+            "SELECT count(*) FROM pg_constraint c JOIN pg_namespace n ON n.oid = c.connamespace"
+            f" WHERE n.nspname = '{db_settings.schema_name}' AND c.contype = 'f'"
+            " AND (c.confdeltype <> 'a' OR c.confupdtype <> 'a')",
+        )
+        == 0
+    )
+
+
+@pytest.fixture
+def app_user(db_settings):
+    """A new app user and schema, set up by db-init and dropped afterwards by the admin."""
+    suffix = uuid.uuid4().hex[:8]
+    app = DatabaseSettings(
+        user=f"test_app_{suffix}", password=f"pw_{suffix}", schema_name=f"test_app_{suffix}"
+    )
+    admin = AdminSettings()
+    yield app, admin
+
+    engine = create_engine(admin.url(app))
+    with engine.begin() as conn:
+        conn.execute(text(f'DROP SCHEMA IF EXISTS "{app.schema_name}" CASCADE'))
+        conn.execute(text(f'DROP OWNED BY "{app.user}"'))
+        conn.execute(text(f'DROP ROLE IF EXISTS "{app.user}"'))
+    engine.dispose()
+
+
+def test_db_init_lets_the_app_user_migrate(app_user):
+    app, admin = app_user
+    init_database(app, admin)
+    init_database(app, admin)  # reruns are safe: the role and the schema already exist
+
+    run(app, "migrate")
+
+    assert scalar(app, "SELECT current_user") == app.user
+    assert (
+        scalar(
+            app,
+            "SELECT count(*) FROM pg_tables"
+            f" WHERE schemaname = '{app.schema_name}' AND tableowner <> '{app.user}'",
+        )
+        == 0
+    )
+    assert scalar(app, "SELECT count(*) FROM products") == 29120

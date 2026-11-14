@@ -18,7 +18,14 @@ def run_migrations_online() -> None:
     engine = make_engine(db)
 
     with engine.connect() as connection:
-        connection.execute(text(f'CREATE SCHEMA IF NOT EXISTS "{db.schema_name}"'))
+        # On AWS, db-init creates the schema and the app user can't create schemas, and
+        # Postgres checks that privilege even for CREATE SCHEMA IF NOT EXISTS.
+        exists = connection.execute(
+            text("SELECT 1 FROM pg_namespace WHERE nspname = :name"), {"name": db.schema_name}
+        ).first()
+        if not exists:
+            connection.execute(text(f'CREATE SCHEMA "{db.schema_name}"'))
+        # End the implicit transaction, so Alembic's own transaction below commits.
         connection.commit()
 
         context.configure(

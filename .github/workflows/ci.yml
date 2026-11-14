@@ -24,6 +24,8 @@ jobs:
       DB_USER: postgres
       DB_PASSWORD: postgres
       DB_NAME: postgres
+      DB_ADMIN_USER: postgres
+      DB_ADMIN_PASSWORD: postgres
       REQUIRE_DB_TESTS: "1"
     steps:
       - uses: actions/checkout@v6

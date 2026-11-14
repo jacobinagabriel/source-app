@@ -176,8 +176,10 @@ class Order(Base):
     cancelled_at: Mapped[datetime.datetime | None]
 
     user: Mapped[User] = relationship()
+    # Deleting an order deletes its items from the ORM, one DELETE per item, before the
+    # order. The foreign key has no ON DELETE CASCADE: zero-ETL rejects cascading keys.
     items: Mapped[list["OrderItem"]] = relationship(
-        back_populates="order", cascade="all, delete-orphan", passive_deletes=True
+        back_populates="order", cascade="all, delete-orphan"
     )
 
     @classmethod
@@ -245,9 +247,7 @@ class OrderItem(Base):
     __tablename__ = "order_items"
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True)
-    order_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("orders.id", ondelete="CASCADE"), index=True
-    )
+    order_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("orders.id"), index=True)
     product_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("products.id"))
     status: Mapped[str]
     quantity: Mapped[int]

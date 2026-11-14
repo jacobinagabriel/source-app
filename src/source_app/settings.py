@@ -28,6 +28,23 @@ class DatabaseSettings(BaseSettings):
         )
 
 
+class AdminSettings(BaseSettings):
+    """Credentials of the database admin, read from DB_ADMIN_* environment variables.
+
+    Only `db-init` uses them, to create the app user and its schema. On Aurora this is
+    the master user; in docker-compose it's the postgres superuser.
+    """
+
+    model_config = SettingsConfigDict(env_prefix="DB_ADMIN_")
+
+    user: str = "postgres"
+    password: SecretStr = SecretStr("postgres")
+
+    def url(self, db: DatabaseSettings) -> URL:
+        """The app database's URL, connecting as the admin."""
+        return db.url().set(username=self.user, password=self.password.get_secret_value())
+
+
 class SimulationSettings(BaseSettings):
     """Traffic shape, read from SIM_* environment variables."""
 

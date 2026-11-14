@@ -51,7 +51,14 @@ class TheLookECommSimulator:
         logging.info("Database is at the latest revision.")
 
     async def seed(self):
-        """Creates the initial users. Reference data comes from the migrations."""
+        """Creates the initial users, unless there are users already.
+
+        Reference data comes from the migrations. Skipping when users exist lets a
+        deploy run `seed` every time.
+        """
+        if await asyncio.to_thread(self._has_users):
+            logging.info("Users already exist; skipping the seed.")
+            return
         users = [self._new_user() for _ in range(self.sim.init_num_users)]
         logging.info(f"Writing {len(users)} initial users...")
         await asyncio.to_thread(self._add_all, users)
@@ -64,6 +71,10 @@ class TheLookECommSimulator:
             postal_code=self.sim.postal_code,
             fake=self.fake,
         )
+
+    def _has_users(self) -> bool:
+        with self.Session() as session:
+            return repository.has_users(session)
 
     def _add_all(self, rows: list) -> None:
         with self.Session.begin() as session:
@@ -177,7 +188,7 @@ class TheLookECommSimulator:
             await asyncio.gather(*side_tasks)
 
     def _delete_cancelled_order(self) -> None:
-        """Deletes a random cancelled order; the database cascades to its items."""
+        """Deletes a random cancelled order, its items first."""
         with self.Session.begin() as session:
             order = repository.random_cancelled_order(session)
             if order is None:

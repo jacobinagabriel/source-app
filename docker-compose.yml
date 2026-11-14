@@ -1,5 +1,6 @@
-# Local stand-in for the RDS instance: same engine major, logical replication on,
-# so CDC tools (Debezium, DMS-like readers) can be pointed at it.
+# Local stand-in for Aurora PostgreSQL: same engine major, logical replication on, so
+# CDC tools (Debezium, DMS-like readers) can be pointed at it. The postgres superuser
+# plays the Aurora master user; the app connects as its own user, created by db-init.
 services:
   db:
     image: postgres:17
@@ -13,17 +14,33 @@ services:
       - max_wal_senders=10
     environment:
       POSTGRES_DB: source_app
-      POSTGRES_USER: source_app
-      POSTGRES_PASSWORD: source_app
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
     ports: ["5432:5432"]
     volumes: ["pgdata:/var/lib/postgresql/data"]
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U source_app -d source_app"]
+      test: ["CMD-SHELL", "pg_isready -U postgres -d source_app"]
       interval: 2s
       timeout: 5s
       retries: 30
 
-  app:
+  # The same one-off steps the deploy workflow runs as ECS tasks: db-init, migrate, seed.
+  db-init:
+    build: .
+    environment:
+      DB_HOST: db
+      DB_NAME: source_app
+      DB_USER: source_app
+      DB_PASSWORD: source_app
+      DB_SCHEMA: demo
+      DB_ADMIN_USER: postgres
+      DB_ADMIN_PASSWORD: postgres
+    depends_on:
+      db:
+        condition: service_healthy
+    command: ["db-init"]
+
+  migrate:
     build: .
     environment: &app-env
       DB_HOST: db
@@ -32,17 +49,27 @@ services:
       DB_PASSWORD: source_app
       DB_SCHEMA: demo
     depends_on:
+      db-init:
+        condition: service_completed_successfully
+    command: ["migrate"]
+
+  seed:
+    build: .
+    environment:
+      <<: *app-env
+      SIM_INIT_NUM_USERS: "200"
+    depends_on:
       migrate:
         condition: service_completed_successfully
-    command: ["run"]
+    command: ["seed"]
 
-  migrate:
+  app:
     build: .
     environment: *app-env
     depends_on:
-      db:
-        condition: service_healthy
-    command: ["migrate"]
+      seed:
+        condition: service_completed_successfully
+    command: ["run"]
 
 volumes:
   pgdata:

@@ -15,8 +15,9 @@ Needs Python 3.12+, [uv](https://docs.astral.sh/uv/), and a PostgreSQL database.
 ```bash
 uv sync
 export DB_HOST=localhost DB_NAME=source_app DB_USER=source_app DB_PASSWORD=source_app
+DB_ADMIN_USER=postgres DB_ADMIN_PASSWORD=... uv run source-app db-init   # as the admin: create the app user, grant it the schema
 uv run source-app migrate   # apply Alembic migrations: schema, products, distribution centers
-uv run source-app seed      # create the initial users
+uv run source-app seed      # create the initial users (does nothing if there are users)
 uv run source-app run       # generate traffic until stopped
 ```
 
@@ -36,6 +37,7 @@ Every setting comes from an environment variable, and a command-line flag of the
 | `DB_HOST`, `DB_PORT` | `--db-host`, `--db-port` | `localhost`, `5432` |
 | `DB_NAME`, `DB_USER`, `DB_PASSWORD` | `--db-name`, `--db-user`, `--db-password` | `source_app` |
 | `DB_SCHEMA` | `--db-schema` | `demo` |
+| `DB_ADMIN_USER`, `DB_ADMIN_PASSWORD` | `--db-admin-user`, `--db-admin-password` | `postgres` (used only by `db-init`) |
 | `SIM_AVG_QPS` | `--avg-qps` | `20` purchases/second on average |
 | `SIM_MAX_ITER` | `--max-iter` | `-1` (run forever) |
 | `SIM_INIT_NUM_USERS` | `--init-num-users` | `1000` (used by `seed`) |
@@ -52,20 +54,22 @@ Each loop iteration (paced by `--avg-qps`) picks a user and writes an order, its
 | Address change | `--user-update-prob` (0.1) | update `users` |
 | Order status change | `--order-update-prob` (0.4) | update `orders` and `order_items`, insert cancel/return events |
 | Anonymous browsing | `--ghost-create-prob` (0.2) | insert into `events` (no `user_id`) |
-| Delete a cancelled order | `--order-delete-prob` (0.05) | delete from `orders`, cascading to `order_items` |
+| Delete a cancelled order | `--order-delete-prob` (0.05) | delete its `order_items`, then the order (the foreign key doesn't cascade, which zero-ETL requires) |
 | Purge old anonymous events | `--ghost-purge-prob` (0.05) | delete up to `--ghost-purge-batch` (100) `events` older than `--ghost-retention-minutes` (60) |
 
 The run logs a count of committed actions by type every 1,000 iterations and when it stops.
 
 ## Local Postgres
 
-`docker-compose.yml` runs Postgres 17 with `wal_level=logical` (Aurora gets logical replication through its cluster parameter group), so CDC tools can read from it too.
+`docker-compose.yml` runs Postgres 17 with `wal_level=logical` (Aurora gets logical replication through its cluster parameter group), so CDC tools can read from it too. The `postgres` superuser stands in for the Aurora master user: `db-init` uses it to create the `source_app` user, and everything else connects as `source_app`. The app containers run `db-init`, `migrate`, `seed` and then `run`, the same steps the deploy workflow runs on ECS.
+
+The app connects as its own user since migration `0004`, so if your local volume was created before that, run `make reset` once.
 
 ```bash
 make up        # start Postgres
-make seed      # migrate + initial users, from the host
+make seed      # db-init + migrate + initial users, from the host
 make run ARGS="--avg-qps 50"
-make app       # or: migrate + generator in containers, the way ECS runs them
+make app       # or: db-init, migrate, seed + generator in containers, the way ECS runs them
 make smoke     # containers end to end, with checks on the resulting data
 make down      # stop (make reset also deletes the data)
 ```
