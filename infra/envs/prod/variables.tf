@@ -11,9 +11,9 @@ variable "base_ssm_prefix" {
 }
 
 variable "db_instance_class" {
-  description = "Aurora writer instance class (a larger one for heavy benchmark runs)"
+  description = "RDS instance class (a larger, non-burstable one for measured runs)"
   type        = string
-  default     = "db.t4g.medium"
+  default     = "db.t4g.micro"
 }
 
 variable "alarm_email" {
