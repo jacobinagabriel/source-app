@@ -1,41 +1,36 @@
-output "cluster_id" {
-  description = "Cluster identifier"
-  value       = aws_rds_cluster.this.cluster_identifier
+output "instance_id" {
+  description = "DB instance identifier"
+  value       = aws_db_instance.this.identifier
 }
 
-output "cluster_arn" {
-  description = "Cluster ARN (the zero-ETL integration source)"
-  value       = aws_rds_cluster.this.arn
+output "instance_arn" {
+  description = "DB instance ARN (the zero-ETL integration source)"
+  value       = aws_db_instance.this.arn
 }
 
 output "endpoint" {
-  description = "Writer endpoint"
-  value       = aws_rds_cluster.this.endpoint
-}
-
-output "reader_endpoint" {
-  description = "Reader endpoint"
-  value       = aws_rds_cluster.this.reader_endpoint
+  description = "Instance host name (without the port)"
+  value       = aws_db_instance.this.address
 }
 
 output "port" {
   description = "PostgreSQL port"
-  value       = aws_rds_cluster.this.port
+  value       = aws_db_instance.this.port
 }
 
 output "database_name" {
   description = "Database the app uses"
-  value       = aws_rds_cluster.this.database_name
+  value       = aws_db_instance.this.db_name
 }
 
 output "engine" {
   description = "Engine"
-  value       = aws_rds_cluster.this.engine
+  value       = aws_db_instance.this.engine
 }
 
 output "engine_version" {
   description = "Running engine version"
-  value       = aws_rds_cluster.this.engine_version_actual
+  value       = aws_db_instance.this.engine_version_actual
 }
 
 output "security_group_id" {
@@ -43,9 +38,9 @@ output "security_group_id" {
   value       = aws_security_group.db.id
 }
 
-output "cluster_parameter_group_name" {
-  description = "Cluster parameter group with the replication settings"
-  value       = aws_rds_cluster_parameter_group.this.name
+output "parameter_group_name" {
+  description = "DB parameter group with the replication settings"
+  value       = aws_db_parameter_group.this.name
 }
 
 output "max_replication_slots" {
@@ -55,7 +50,7 @@ output "max_replication_slots" {
 
 output "admin_secret_arn" {
   description = "RDS-managed secret of the master user (JSON with username and password)"
-  value       = aws_rds_cluster.this.master_user_secret[0].secret_arn
+  value       = aws_db_instance.this.master_user_secret[0].secret_arn
 }
 
 output "app_secret_arn" {
@@ -71,9 +66,4 @@ output "admin_username" {
 output "app_username" {
   description = "App user name"
   value       = var.app_username
-}
-
-output "writer_instance_id" {
-  description = "Writer instance identifier"
-  value       = aws_rds_cluster_instance.writer.identifier
 }

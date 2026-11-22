@@ -24,17 +24,17 @@ output "app_role_boundary_arn" {
 }
 
 output "db_endpoint" {
-  description = "Aurora writer endpoint"
+  description = "RDS instance host name"
   value       = module.database.endpoint
 }
 
-output "db_cluster_arn" {
-  description = "Aurora cluster ARN"
-  value       = module.database.cluster_arn
+output "db_instance_arn" {
+  description = "RDS instance ARN"
+  value       = module.database.instance_arn
 }
 
 output "db_engine_version" {
-  description = "Running Aurora PostgreSQL version"
+  description = "Running PostgreSQL version"
   value       = module.database.engine_version
 }
 

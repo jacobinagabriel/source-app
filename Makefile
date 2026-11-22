@@ -5,7 +5,7 @@ export DB_NAME ?= source_app
 export DB_USER ?= source_app
 export DB_PASSWORD ?= source_app
 export DB_SCHEMA ?= demo
-# The compose superuser, standing in for the Aurora master user (db-init only).
+# The compose superuser, standing in for the RDS master user (db-init only).
 export DB_ADMIN_USER ?= postgres
 export DB_ADMIN_PASSWORD ?= postgres
 
