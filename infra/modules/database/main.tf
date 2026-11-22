@@ -1,9 +1,10 @@
-# Aurora PostgreSQL, the source of the CDC benchmark. The cluster parameter group
-# carries the settings zero-ETL needs (Aurora docs, "Getting started with zero-ETL
-# integrations"); DMS and Debezium only need the logical replication part of them.
+# RDS for PostgreSQL, the source of the CDC benchmark. The parameter group carries
+# the settings DMS and Debezium need (logical replication), plus the rest of what
+# zero-ETL to Redshift asks for (RDS docs, "Getting started with zero-ETL
+# integrations"), so the bench repo can add that arm without touching this stack.
 
 data "aws_rds_engine_version" "this" {
-  engine  = "aurora-postgresql"
+  engine  = "postgres"
   version = var.engine_major_version
   latest  = true
 }
@@ -25,7 +26,7 @@ resource "aws_db_subnet_group" "this" {
 # pipelines. No egress either; the database never calls out.
 resource "aws_security_group" "db" {
   name        = "${var.name}-db"
-  description = "Aurora PostgreSQL for ${var.name}"
+  description = "RDS for PostgreSQL for ${var.name}"
   vpc_id      = var.vpc_id
 
   tags = { Name = "${var.name}-db" }
@@ -33,53 +34,33 @@ resource "aws_security_group" "db" {
 
 # --- Parameters ----------------------------------------------------------------
 
-resource "aws_rds_cluster_parameter_group" "this" {
+# Every value is applied when the instance is created, so pending-reboot (which
+# static parameters require) never actually needs a reboot.
+resource "aws_db_parameter_group" "this" {
   name_prefix = "${var.name}-${data.aws_rds_engine_version.this.parameter_group_family}-"
   family      = data.aws_rds_engine_version.this.parameter_group_family
   description = "Logical replication for CDC and zero-ETL"
 
-  # The four zero-ETL settings. Enhanced logical replication writes full rows to the
-  # WAL, so REPLICA IDENTITY FULL isn't needed. Toggling it later invalidates every
-  # replication slot, so it's set once, at creation.
-  parameter {
-    name         = "rds.logical_replication"
-    value        = "1"
-    apply_method = "pending-reboot"
-  }
+  dynamic "parameter" {
+    for_each = {
+      "rds.logical_replication" = "1"
+      # Full old rows in the WAL for every table, as zero-ETL requires; DMS and
+      # Debezium get complete before-images on updates and deletes too.
+      "rds.replica_identity_full" = "1"
+      "session_replication_role"  = "origin"
+      "wal_sender_timeout"        = "0"
+      "max_replication_slots"     = tostring(var.max_replication_slots)
+      "max_wal_senders"           = tostring(var.max_replication_slots)
+      # Never drop WAL a slot still needs; the storage alarm catches a stuck slot.
+      "max_slot_wal_keep_size" = "-1"
+      "rds.force_ssl"          = "1"
+    }
 
-  parameter {
-    name         = "aurora.enhanced_logical_replication"
-    value        = "1"
-    apply_method = "pending-reboot"
-  }
-
-  parameter {
-    name         = "aurora.logical_replication_backup"
-    value        = "0"
-    apply_method = "pending-reboot"
-  }
-
-  parameter {
-    name         = "aurora.logical_replication_globaldb"
-    value        = "0"
-    apply_method = "pending-reboot"
-  }
-
-  parameter {
-    name         = "max_replication_slots"
-    value        = tostring(var.max_replication_slots)
-    apply_method = "pending-reboot"
-  }
-
-  parameter {
-    name         = "max_wal_senders"
-    value        = tostring(var.max_replication_slots)
-    apply_method = "pending-reboot"
-  }
-
-  parameter {
-    name  = "rds.force_ssl"
-    value = "1"
+    content {
+      name         = parameter.key
+      value        = parameter.value
+      apply_method = "pending-reboot"
+    }
   }
 
   lifecycle {
@@ -87,49 +68,61 @@ resource "aws_rds_cluster_parameter_group" "this" {
   }
 }
 
-# --- Cluster -------------------------------------------------------------------
+# --- Instance ------------------------------------------------------------------
 
-# Created before the cluster so destroy also removes it; otherwise RDS creates it
+# Created before the instance so destroy also removes it; otherwise RDS creates it
 # with no expiry and it outlives the stack.
 resource "aws_cloudwatch_log_group" "postgresql" {
   #checkov:skip=CKV_AWS_158:Logs of a synthetic benchmark database; the default AWS-owned encryption is enough.
   #checkov:skip=CKV_AWS_338:Short retention on purpose; the stack is destroyed after each benchmark.
-  name              = "/aws/rds/cluster/${var.name}/postgresql"
+  name              = "/aws/rds/instance/${var.name}/postgresql"
   retention_in_days = var.log_retention_days
 }
 
-resource "aws_rds_cluster" "this" {
-  #checkov:skip=CKV_AWS_139:Destroyed after each benchmark; deletion protection would block the down workflow.
-  #checkov:skip=CKV_AWS_162:The app uses a password user created by db-init; IAM auth is not needed.
-  #checkov:skip=CKV_AWS_327:AWS managed key; a customer managed key costs more and adds nothing for synthetic data.
-  #checkov:skip=CKV2_AWS_8:No backup plan; the data is synthetic and recreated on every up.
-  #checkov:skip=CKV2_AWS_27:No statement logging; logging every query of the generator would distort the benchmark and cost more than the database.
-  cluster_identifier = var.name
-  engine             = "aurora-postgresql"
-  engine_mode        = "provisioned"
-  engine_version     = local.engine_version
-  database_name      = var.database_name
+resource "aws_db_instance" "this" {
+  #checkov:skip=CKV_AWS_157:Single-AZ on purpose; the stack is destroyed after each benchmark and zero-ETL doesn't need Multi-AZ.
+  #checkov:skip=CKV_AWS_161:The app uses a password user created by db-init; IAM auth is not needed.
+  #checkov:skip=CKV_AWS_293:Destroyed after each benchmark; deletion protection would block the down workflow.
+  #checkov:skip=CKV_AWS_118:No enhanced monitoring; CloudWatch covers a benchmark run.
+  #checkov:skip=CKV_AWS_353:Performance Insights is optional (var.performance_insights_enabled); the small classes don't offer it.
+  #checkov:skip=CKV_AWS_354:Performance Insights, when on, uses the AWS managed key.
+  #checkov:skip=CKV2_AWS_30:No statement logging; logging every query of the generator would distort the benchmark and cost more than the database.
+  #checkov:skip=CKV2_AWS_60:Snapshots are never kept (skip_final_snapshot), so there are no tags to copy.
+  identifier     = var.name
+  engine         = "postgres"
+  engine_version = local.engine_version
+  instance_class = var.instance_class
+  db_name        = var.database_name
 
-  master_username             = var.admin_username
+  # A stuck replication slot fills the disk; autoscaling buys time for the alarm.
+  allocated_storage     = var.allocated_storage
+  max_allocated_storage = var.max_allocated_storage
+  storage_type          = "gp3"
+  storage_encrypted     = true
+
+  username                    = var.admin_username
   manage_master_user_password = true
 
-  db_subnet_group_name            = aws_db_subnet_group.this.name
-  vpc_security_group_ids          = [aws_security_group.db.id]
-  db_cluster_parameter_group_name = aws_rds_cluster_parameter_group.this.name
+  db_subnet_group_name   = aws_db_subnet_group.this.name
+  vpc_security_group_ids = [aws_security_group.db.id]
+  parameter_group_name   = aws_db_parameter_group.this.name
+  multi_az               = false
+  publicly_accessible    = false
 
-  storage_encrypted               = true
+  # Zero-ETL requires automated backups.
   backup_retention_period         = var.backup_retention_days
-  copy_tags_to_snapshot           = true
   deletion_protection             = var.deletion_protection
   skip_final_snapshot             = var.skip_final_snapshot
   final_snapshot_identifier       = var.skip_final_snapshot ? null : "${var.name}-final"
   enabled_cloudwatch_logs_exports = ["postgresql"]
+  performance_insights_enabled    = var.performance_insights_enabled
+  auto_minor_version_upgrade      = true
   apply_immediately               = true
 
   depends_on = [aws_cloudwatch_log_group.postgresql]
 
   lifecycle {
-    # A newer minor version in the data source must not upgrade a running cluster.
+    # A newer minor version in the data source must not upgrade a running instance.
     ignore_changes = [engine_version]
 
     precondition {
@@ -137,23 +130,9 @@ resource "aws_rds_cluster" "this" {
         local.version_parts[0] > local.min_parts[0] ||
         (local.version_parts[0] == local.min_parts[0] && local.version_parts[1] >= local.min_parts[1])
       )
-      error_message = "Aurora PostgreSQL ${local.engine_version} is older than ${var.min_engine_version}, the minimum for zero-ETL to the SageMaker lakehouse."
+      error_message = "PostgreSQL ${local.engine_version} is older than ${var.min_engine_version}, the minimum for zero-ETL to Redshift."
     }
   }
-}
-
-resource "aws_rds_cluster_instance" "writer" {
-  #checkov:skip=CKV_AWS_118:No enhanced monitoring; Performance Insights and CloudWatch cover a benchmark run.
-  #checkov:skip=CKV_AWS_354:Performance Insights uses the AWS managed key.
-  identifier                   = "${var.name}-1"
-  cluster_identifier           = aws_rds_cluster.this.id
-  instance_class               = var.instance_class
-  engine                       = aws_rds_cluster.this.engine
-  db_subnet_group_name         = aws_db_subnet_group.this.name
-  publicly_accessible          = false
-  auto_minor_version_upgrade   = true
-  performance_insights_enabled = true # 7 days of retention are free
-  apply_immediately            = true
 }
 
 # --- App user secret -------------------------------------------------------------
@@ -185,8 +164,8 @@ resource "aws_secretsmanager_secret_version" "app" {
 
 # --- Alarms ----------------------------------------------------------------------
 
-# Aurora storage grows by itself, so a replication slot nobody reads doesn't fill a
-# disk: it quietly costs money. These alarms catch WAL piling up for slots.
+# A replication slot nobody reads keeps WAL until the disk is full. These alarms
+# catch WAL piling up for slots, and the disk running out anyway.
 resource "aws_sns_topic" "alarms" {
   name              = "${var.name}-db-alarms"
   kms_master_key_id = "alias/aws/sns"
@@ -203,15 +182,31 @@ resource "aws_cloudwatch_metric_alarm" "replication" {
   for_each = toset(["ReplicationSlotDiskUsage", "TransactionLogsDiskUsage"])
 
   alarm_name          = "${var.name}-${each.key}"
-  alarm_description   = "WAL kept for replication slots on ${aws_rds_cluster_instance.writer.identifier} is growing; a pipeline may be stopped."
+  alarm_description   = "WAL kept for replication slots on ${aws_db_instance.this.identifier} is growing; a pipeline may be stopped."
   namespace           = "AWS/RDS"
   metric_name         = each.key
-  dimensions          = { DBInstanceIdentifier = aws_rds_cluster_instance.writer.identifier }
+  dimensions          = { DBInstanceIdentifier = aws_db_instance.this.identifier }
   statistic           = "Maximum"
   period              = 300
   evaluation_periods  = 3
   threshold           = var.replication_disk_alarm_bytes
   comparison_operator = "GreaterThanThreshold"
+  treat_missing_data  = "notBreaching"
+  alarm_actions       = [aws_sns_topic.alarms.arn]
+  ok_actions          = [aws_sns_topic.alarms.arn]
+}
+
+resource "aws_cloudwatch_metric_alarm" "free_storage" {
+  alarm_name          = "${var.name}-FreeStorageSpace"
+  alarm_description   = "${aws_db_instance.this.identifier} is running out of disk; check for a stuck replication slot."
+  namespace           = "AWS/RDS"
+  metric_name         = "FreeStorageSpace"
+  dimensions          = { DBInstanceIdentifier = aws_db_instance.this.identifier }
+  statistic           = "Minimum"
+  period              = 300
+  evaluation_periods  = 1
+  threshold           = var.free_storage_alarm_bytes
+  comparison_operator = "LessThanThreshold"
   treat_missing_data  = "notBreaching"
   alarm_actions       = [aws_sns_topic.alarms.arn]
   ok_actions          = [aws_sns_topic.alarms.arn]

@@ -31,7 +31,7 @@ class DatabaseSettings(BaseSettings):
 class AdminSettings(BaseSettings):
     """Credentials of the database admin, read from DB_ADMIN_* environment variables.
 
-    Only `db-init` uses them, to create the app user and its schema. On Aurora this is
+    Only `db-init` uses them, to create the app user and its schema. On RDS this is
     the master user; in docker-compose it's the postgres superuser.
     """
 
