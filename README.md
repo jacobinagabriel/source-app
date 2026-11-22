@@ -2,7 +2,7 @@
 
 A minimal OLTP traffic generator for PostgreSQL. It simulates an e-commerce shop (users, orders, order items, web events) and writes inserts, updates and deletes straight to the database, so a change data capture (CDC) pipeline has a realistic source to read from.
 
-It is the source system for a benchmark that compares three ways of replicating Aurora PostgreSQL changes into Apache Iceberg on AWS (DMS, zero-ETL and Debezium). The plan lives in [docs/PLAN.md](docs/PLAN.md). This repo knows nothing about CDC: it only offers a database worth replicating.
+It is the source system for a benchmark that compares ways of replicating RDS for PostgreSQL changes into Apache Iceberg on AWS (DMS and Debezium, with zero-ETL to Redshift as an optional extra). The plan lives in [docs/PLAN.md](docs/PLAN.md). This repo knows nothing about CDC: it only offers a database worth replicating.
 
 ## Credit
 
@@ -61,7 +61,7 @@ The run logs a count of committed actions by type every 1,000 iterations and whe
 
 ## Local Postgres
 
-`docker-compose.yml` runs Postgres 17 with `wal_level=logical` (Aurora gets logical replication through its cluster parameter group), so CDC tools can read from it too. The `postgres` superuser stands in for the Aurora master user: `db-init` uses it to create the `source_app` user, and everything else connects as `source_app`. The app containers run `db-init`, `migrate`, `seed` and then `run`, the same steps the deploy workflow runs on ECS.
+`docker-compose.yml` runs Postgres 17 with `wal_level=logical` (RDS gets logical replication through its parameter group), so CDC tools can read from it too. The `postgres` superuser stands in for the RDS master user: `db-init` uses it to create the `source_app` user, and everything else connects as `source_app`. The app containers run `db-init`, `migrate`, `seed` and then `run`, the same steps the deploy workflow runs on ECS.
 
 The app connects as its own user since migration `0004`, so if your local volume was created before that, run `make reset` once.
 
@@ -86,7 +86,7 @@ CI (`terraform`) runs fmt, validate, tflint and checkov on every PR, and comment
 
 - **up** does five things in order:
   1. Builds the ARM64 image, tagged with the commit SHA, and pushes it to ECR.
-  2. Applies `infra/envs/prod` (Aurora PostgreSQL 17, the ECS generator, the SSM contract).
+  2. Applies `infra/envs/prod` (RDS for PostgreSQL 17, the ECS generator, the SSM contract).
   3. Runs `db-init`, `migrate` and `seed` as one-off ECS tasks.
   4. Records the schema version.
   5. Starts `generator_count` generator tasks at `avg_qps`.
@@ -94,7 +94,7 @@ CI (`terraform`) runs fmt, validate, tflint and checkov on every PR, and comment
   Running it again deploys the current commit the same way.
 - **down** refuses while `cdc-iceberg-bench` is deployed, then destroys everything. Only the ECR images remain.
 
-While up, it costs roughly $0.09/hour (Aurora `db.t4g.medium` plus one Fargate task). Down, it costs about $0. Check the contract the bench repo reads with `make contract-check` (needs `AWS_PROFILE`).
+While up, it costs roughly $0.035/hour (RDS `db.t4g.micro` plus one Fargate task). Down, it costs about $0. Check the contract the bench repo reads with `make contract-check` (needs `AWS_PROFILE`).
 
 ## Development
 
